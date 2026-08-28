@@ -14,10 +14,15 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 
-from fastmcp import FastMCP
+# Run directly (`python3 server/mcp_server.py`) and only server/ lands on sys.path,
+# so the repo root has to be put there before `server.artifacts` can be imported.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from server import artifacts
+from fastmcp import FastMCP  # noqa: E402
+
+from server import artifacts  # noqa: E402
 
 mcp = FastMCP(
     name="ki-icl",

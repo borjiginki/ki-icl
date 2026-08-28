@@ -60,3 +60,26 @@ async def test_get_artifact_tells_the_model_not_to_substitute_a_similar_id():
 
     assert "not_found" in doc
     assert "substitute" in doc.lower()
+
+
+async def test_the_script_runs_as_a_subprocess_the_way_a_stdio_client_launches_it(
+    tmp_path: Path, catalog: Path
+):
+    """Running `python server/mcp_server.py` puts server/ on sys.path, not the repo
+    root, so `from server import artifacts` fails unless the script bootstraps it."""
+    from fastmcp import Client
+    from fastmcp.client.transports import StdioTransport
+
+    repo = Path(__file__).resolve().parent.parent
+    transport = StdioTransport(
+        command=sys.executable,
+        args=[str(repo / "server" / "mcp_server.py")],
+        env={"CONTEXT_ROOT": str(catalog), "PATH": "/usr/bin:/bin"},
+    )
+
+    async with Client(transport) as client:
+        names = {t.name for t in await client.list_tools()}
+        result = await client.call_tool("list_domains", {})
+
+    assert {"list_domains", "get_domain_manifest", "get_artifact"} <= names
+    assert json.loads(result.content[0].text)["domains"][0]["id"] == "company"

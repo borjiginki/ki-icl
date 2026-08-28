@@ -21,7 +21,7 @@ There is no similarity path, no closest match, and no fuzzy-matching code anywhe
 
 ```bash
 make install     # .venv + dependencies
-make test        # 38 tests
+make test        # 39 tests
 make demo        # walk the acceptance demo end to end
 make serve-http  # MCP server on http://127.0.0.1:8000/mcp
 ```
