@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fastmcp import FastMCP  # noqa: E402
 
 from server import artifacts  # noqa: E402
+from server.usage import ContextUsageMiddleware  # noqa: E402
 
 mcp = FastMCP(
     name="ki-icl",
@@ -35,6 +36,7 @@ mcp = FastMCP(
         "id: say so, and never substitute a similar one."
     ),
 )
+mcp.add_middleware(ContextUsageMiddleware())
 
 
 @mcp.tool

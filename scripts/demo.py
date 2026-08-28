@@ -42,9 +42,9 @@ async def main() -> int:
 
         domains = await call("list_domains", {})
         ids = [d["id"] for d in domains["domains"]]
-        check("4. list_domains() shows the company domain", "company" in ids, f"domains={ids}")
+        check("4. list_domains() shows the hr domain", "hr" in ids, f"domains={ids}")
 
-        manifest = await call("get_domain_manifest", {"domain": "company"})
+        manifest = await call("get_domain_manifest", {"domain": "hr"})
         row = next((a for a in manifest.get("artifacts", []) if a["id"] == "expense-policy"), None)
         check(
             "5. get_domain_manifest lists expense-policy with a version_id",
@@ -52,7 +52,7 @@ async def main() -> int:
             f"version_id={row and row.get('version_id')}",
         )
 
-        found = await call("get_artifact", {"domain": "company", "ids": ["expense-policy"]})
+        found = await call("get_artifact", {"domain": "hr", "ids": ["expense-policy"]})
         entry = found["artifacts"][0]
         readme = next((f for f in entry.get("files", []) if f["path"] == "README.md"), None)
         check(
@@ -62,7 +62,7 @@ async def main() -> int:
             f"{readme and len(readme['content'])} chars of README.md",
         )
 
-        typo = await call("get_artifact", {"domain": "company", "ids": ["expense-polcy"]})
+        typo = await call("get_artifact", {"domain": "hr", "ids": ["expense-polcy"]})
         miss = typo["artifacts"][0]
         check(
             "7. one character wrong is an honest miss, and nothing else",
@@ -71,7 +71,7 @@ async def main() -> int:
         )
 
         batch = await call(
-            "get_artifact", {"domain": "company", "ids": ["expense-policy", "does-not-exist"]}
+            "get_artifact", {"domain": "hr", "ids": ["expense-policy", "does-not-exist"]}
         )
         statuses = [(a["id"], a["status"]) for a in batch["artifacts"]]
         check(

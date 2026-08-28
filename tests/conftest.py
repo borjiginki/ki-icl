@@ -109,3 +109,18 @@ def source_tree(tmp_path: Path) -> Path:
         agenda__md="# Agenda\n",
     )
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def isolated_usage_log(tmp_path: Path, monkeypatch):
+    """No test may append to the repo's real logs/usage.jsonl.
+
+    The middleware is registered on the module-level `mcp`, so any test that calls a
+    tool writes through it. Autouse, because remembering to opt in is exactly the
+    thing that fails silently.
+    """
+    from server import usage
+
+    monkeypatch.setattr(
+        usage, "USAGE_LOG", usage.UsageLog(path=tmp_path / "usage.jsonl", stream=None)
+    )

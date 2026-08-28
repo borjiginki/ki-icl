@@ -71,10 +71,17 @@ async def test_the_script_runs_as_a_subprocess_the_way_a_stdio_client_launches_i
     from fastmcp.client.transports import StdioTransport
 
     repo = Path(__file__).resolve().parent.parent
+    usage_log = tmp_path / "usage.jsonl"
     transport = StdioTransport(
         command=sys.executable,
         args=[str(repo / "server" / "mcp_server.py")],
-        env={"CONTEXT_ROOT": str(catalog), "PATH": "/usr/bin:/bin"},
+        env={
+            "CONTEXT_ROOT": str(catalog),
+            # A child process is out of monkeypatch's reach, so the sink has to be
+            # redirected the way an operator would: by environment.
+            "CONTEXT_USAGE_LOG": str(usage_log),
+            "PATH": "/usr/bin:/bin",
+        },
     )
 
     async with Client(transport) as client:
@@ -83,3 +90,4 @@ async def test_the_script_runs_as_a_subprocess_the_way_a_stdio_client_launches_i
 
     assert {"list_domains", "get_domain_manifest", "get_artifact"} <= names
     assert json.loads(result.content[0].text)["domains"][0]["id"] == "company"
+    assert json.loads(usage_log.read_text())["tool"] == "list_domains"

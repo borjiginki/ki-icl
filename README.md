@@ -24,20 +24,24 @@ make install     # .venv + dependencies
 make test        # 39 tests
 make demo        # walk the acceptance demo end to end
 make serve-http  # MCP server on http://127.0.0.1:8000/mcp
+make inspector   # serve, and open MCP Inspector against it
+make usage       # what was looked up, and what was asked for and missed
 ```
 
 ## Layout
 
 ```
-domains/company/                    the content. One folder per domain, one per artifact.
+domains/<domain>/                   the content. One folder per domain, one per artifact.
   domain.yaml                       id + description
-  expense-policy/                   an artifact; the folder IS the artifact
+  <artifact-id>/                    an artifact; the folder IS the artifact
     artifact.yaml                   title, kind, description
     README.md                       required entry document
 scripts/validate_context.py         the gate. Collects every failure, never stops at the first.
 scripts/package_context.py          tar.gz + per-domain _manifest.json + per-artifact version_id
 scripts/demo.py                     the acceptance demo, over a real MCP client
+scripts/usage_report.py             reads logs/usage.jsonl
 server/artifacts.py                 the read path. Lifts into ki-mcp unchanged.
+server/usage.py                     usage logging middleware. Lifts into ki-mcp.
 server/mcp_server.py                throwaway harness. Replaced by ki-mcp's tool registry.
 ```
 
@@ -73,6 +77,29 @@ Every answer carries an opaque `version_id`, taken from the last commit that tou
 Compare it for equality to detect staleness.
 Never parse it.
 
+## Usage logging
+
+Every context lookup is recorded, one line per artifact actually looked up:
+
+```json
+{"ts":"2026-08-28T09:04:11Z","event":"context_use","tool":"get_artifact",
+ "domain":"hr","id":"expense-policy","outcome":"found",
+ "version_id":"b0f9dd0a...","file_count":2,"duration_ms":0.7}
+{"ts":"2026-08-28T09:04:11Z","event":"context_use","tool":"get_artifact",
+ "domain":"hr","id":"parental-leave","outcome":"not_found","duration_ms":0.4}
+```
+
+**The miss records are the reason this exists.**
+An id that is asked for repeatedly and never found is a document somebody needs and nobody has written, and nothing else in the system carries that signal.
+`make usage` puts them in their own table.
+
+Two properties worth keeping:
+
+- **No tool knows about it.** It is FastMCP middleware, so adding a tool needs no logging code and no allowlist entry, and logging cannot fall out of step with the tool list. A logging failure is swallowed: it must stay an annoyance, never an outage.
+- **No caller identity is recorded.** The log says what was looked up, never who looked it up, so no personal data is processed and no Art. 6 GDPR basis is needed. If that ever has to change, port `ki-mcp`'s `utils/observability._caller()` rather than writing a second one: it emits a keyed digest gated on a configured salt, and never an email or a raw object id. Note that a pseudonym is still personal data under GDPR, so that step needs a documented basis.
+
+Sinks are stderr plus `logs/usage.jsonl`. Set `CONTEXT_USAGE_LOG=""` to leave stderr as the only one, which is what production wants: stdout is already collected by Log Analytics and a file would be a second store to own.
+
 ## Connecting a client
 
 ```bash
@@ -104,6 +131,7 @@ Everything here is deliberate, and each item is cheap to add once it is wanted.
 | Registration in ki-mcp | Move `server/artifacts.py` to `ki-mcp/server/utils/artifacts.py` and the three tool functions to `server/tools/artifact_tools.py`. |
 | Ownership, `CODEOWNERS`, approval routing | Deferred by decision. `owner` is already served as `null` at both levels, so adding it is data, not a schema change. |
 | Search, similarity, resolution from task context | Deferred on a stated trigger. Adding it would break the property in the first section. |
+| Aggregating usage beyond a local file | `logs/usage.jsonl` is POC scaffolding. In ki-mcp the records go to stderr and Log Analytics collects them, so the file sink is deleted, not ported. |
 | Binary assets | See the text-only rule above. |
 
 ## Lifting the read path into ki-mcp

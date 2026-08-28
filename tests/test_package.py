@@ -90,20 +90,25 @@ def test_the_optional_class_field_is_carried_through(source_tree: Path, tmp_path
 
 
 def test_the_packaged_output_is_exactly_what_the_read_path_serves(tmp_path: Path, monkeypatch):
-    """End to end over this repo's real content: package it, then fetch through the
-    same code the MCP tools call. This is the acceptance demo without the transport."""
+    """End to end over this repo's real content: package it, then walk it the way an
+    agent does, discovering every id rather than knowing one. Deliberately names no
+    domain or artifact, so renaming content cannot break it."""
     from server import artifacts
 
     out, stage = tmp_path / "dist", tmp_path / "stage"
     build(REPO_ROOT, out, stage)
     monkeypatch.setattr(artifacts, "ARTIFACTS_ROOT", stage)
 
-    assert [d["id"] for d in artifacts.list_domains_payload()["domains"]] == ["company"]
+    domains = artifacts.list_domains_payload()["domains"]
+    assert domains, "this repo ships no domains"
 
-    manifest = artifacts.domain_manifest_payload("company")
-    assert {a["id"] for a in manifest["artifacts"]} == {"expense-policy", "discovery-workshop"}
+    for domain in domains:
+        manifest = artifacts.domain_manifest_payload(domain["id"])
+        assert len(manifest["artifacts"]) == domain["artifact_count"]
 
-    fetched = artifacts.get_artifact_payload("company", ["expense-policy"])
-    (found,) = fetched["artifacts"]
-    readme = next(f for f in found["files"] if f["path"] == "README.md")
-    assert "Approval thresholds" in readme["content"]
+        ids = [a["id"] for a in manifest["artifacts"]]
+        fetched = artifacts.get_artifact_payload(domain["id"], ids)
+        for entry in fetched["artifacts"]:
+            assert entry["status"] == "found", entry
+            readme = next(f for f in entry["files"] if f["path"] == "README.md")
+            assert readme["content"].startswith("#")
