@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: Validate, package, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # package_context.py stamps each artifact with the last commit that touched
+          # its folder, which needs real history rather than a shallow clone.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements-dev.txt
+
+      - name: Validate context
+        run: python3 scripts/validate_context.py
+
+      - name: Package context (context.tar.gz + manifest.json)
+        run: python3 scripts/package_context.py
+
+      - name: Test
+        run: python3 -m pytest -q
