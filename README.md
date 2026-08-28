@@ -103,10 +103,19 @@ Sinks are stderr plus `logs/usage.jsonl`. Set `CONTEXT_USAGE_LOG=""` to leave st
 ## Connecting a client
 
 ```bash
-make serve-http
+make inspector
 ```
 
-Then point an MCP client at `http://127.0.0.1:8000/mcp`. For stdio instead:
+Starts the server and opens MCP Inspector against [mcp-inspector.json](mcp-inspector.json), which lists this repo's two entries and nothing else.
+Both serve the same three tools; `ki-icl-http` is the one `make inspector` starts.
+
+Inspector's default ports collide with any other Inspector already running, and it fails rather than falling back, so override them:
+
+```bash
+make inspector INSPECTOR_CLIENT_PORT=6474 INSPECTOR_SERVER_PORT=6477
+```
+
+To run the server alone, `make serve-http`, then point a client at `http://127.0.0.1:8000/mcp`. For stdio from another tool:
 
 ```json
 {

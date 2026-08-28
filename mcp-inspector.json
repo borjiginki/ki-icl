@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "ki-icl-http": {
+      "type": "streamable-http",
+      "url": "http://127.0.0.1:8000/mcp"
+    },
+    "ki-icl-stdio": {
+      "type": "stdio",
+      "command": ".venv/bin/python",
+      "args": ["server/mcp_server.py"],
+      "env": {
+        "CONTEXT_ROOT": "dist/staging",
+        "CONTEXT_USAGE_LOG": "logs/usage.jsonl"
+      }
+    }
+  }
+}

@@ -34,10 +34,22 @@ serve: package
 serve-http: package
 	CONTEXT_ROOT=dist/staging $(PY) server/mcp_server.py --http
 
+# Ports are overridable because the Inspector's defaults (6274/6277) collide with
+# any other Inspector already running, and it fails rather than falling back.
+INSPECTOR_CLIENT_PORT ?= 6374
+INSPECTOR_SERVER_PORT ?= 6377
+
 inspector: package
-	@echo "Serving http://127.0.0.1:8000/mcp -- opening MCP Inspector..."
+	@echo "Serving http://127.0.0.1:8000/mcp"
 	@CONTEXT_ROOT=dist/staging $(PY) server/mcp_server.py --http & \
-	 sleep 2; npx -y @modelcontextprotocol/inspector; kill %1
+	  server_pid=$$!; \
+	  trap 'kill $$server_pid 2>/dev/null' EXIT INT TERM; \
+	  sleep 2; \
+	  CLIENT_PORT=$(INSPECTOR_CLIENT_PORT) SERVER_PORT=$(INSPECTOR_SERVER_PORT) \
+	    MCP_SANDBOX_PORT=$$(($(INSPECTOR_CLIENT_PORT)+1)) \
+	    MCP_APP_ORIGIN_PORT=$$(($(INSPECTOR_SERVER_PORT)+1)) \
+	    npx -y @modelcontextprotocol/inspector \
+	      --config mcp-inspector.json --server ki-icl-http
 
 usage:
 	@$(PY) scripts/usage_report.py
