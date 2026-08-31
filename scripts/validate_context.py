@@ -13,6 +13,13 @@ from pathlib import Path
 
 import yaml
 
+# Run directly (`python3 scripts/validate_context.py`) and only scripts/ lands on
+# sys.path, so the repo root has to be put there before `scripts.status_header` can be
+# imported. The tests import this module as `scripts.validate_context`.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from scripts import status_header  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 
 # Text only, by construction. Repository size risk is entirely a binaries risk:
@@ -48,10 +55,11 @@ REQUIRED_ARTIFACT_FILES: dict[str, tuple[str, ...]] = {
 ID_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 REQUIRED_ARTIFACT_FIELDS = ("title", "kind", "description")
 
-# `status.md` is only trustworthy if it says when it was written. `version_id` cannot
-# carry that: it is opaque by design, compared for equality and never parsed, so a
-# three-month-old status would otherwise answer with no way to know.
-AS_OF_PATTERN = re.compile(r"\*\*As of (\d{4}-\d{2}-\d{2})", re.IGNORECASE)
+# `status.md` carries a header the packager lifts into the manifest, so it is gated
+# here against the same definitions the packager derives from. Two copies of the
+# format would drift, and a header the gate accepts but the packager cannot read
+# would reach the manifest as a silent null.
+STATUS_FILE = "status.md"
 
 
 def _load_yaml(path: Path, errors: list[str]) -> dict | None:
@@ -150,11 +158,35 @@ def _validate_artifact(artifact_dir: Path, seen: set[str], errors: list[str]) ->
                 f"`{artifact_dir.parent.name}/` must have so the same question is "
                 f"answered from the same place in every one"
             )
-        elif not AS_OF_PATTERN.search(path.read_text(encoding="utf-8")):
+            continue
+        header = status_header.parse(path.read_text(encoding="utf-8"))
+        if header["as_of"] is None:
             errors.append(
                 f"{label}/{name}: no `**As of YYYY-MM-DD**` line. Without it a stale "
                 f"file answers confidently, because `version_id` is opaque and cannot "
                 f"carry recency."
+            )
+        if name == STATUS_FILE:
+            _status_vocabulary(label, header, errors)
+
+
+def _status_vocabulary(label: str, header: dict, errors: list[str]) -> None:
+    """Stage and health must come from the closed lists, or comparing projects fails.
+
+    The packager lifts both into the manifest so that `get_domain_manifest` can answer
+    "which projects are at risk" in one call. Free text defeats that: `in progress`,
+    `ongoing` and `phase 2` are all answers somebody would write, and none of them
+    compares to anything.
+    """
+    for field, allowed in (
+        ("stage", status_header.STAGES),
+        ("health", status_header.HEALTHS),
+    ):
+        if header[field] is None:
+            errors.append(
+                f"{label}/{STATUS_FILE}: needs a line `**{field.title()}:** <value>` "
+                f"with one of: {', '.join(allowed)}. Anything else is dropped rather "
+                f"than guessed, and the manifest would carry a silent null."
             )
 
 

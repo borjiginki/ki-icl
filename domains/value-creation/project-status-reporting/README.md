@@ -20,6 +20,25 @@ That uniformity is the whole point: it is what lets a question be answered from 
 `README.md`, `status.md` and `team.md` are required.
 `decisions.md` and `timeline.md` appear when there is something true to put in them: a project in discovery has committed to no dates and settled no arguments, and empty files would be worse than absent ones.
 
+## The header, and why its format is strict
+
+Every `status.md` opens with exactly these three lines:
+
+```markdown
+**As of 2026-08-28.**
+**Stage:** delivery.
+**Health:** at risk.
+```
+
+They are not a heading style.
+The packaging step reads them out of the file and puts them in the domain listing, so one call to `get_domain_manifest("projects")` answers which projects are off track, what sits in each stage, and whose status has gone stale, without opening a single project.
+
+That only works if every project writes them the same way, which is why the validation gate rejects a file that does not, and why the two vocabularies below are closed.
+A value outside them is dropped rather than guessed, so a typo fails the gate instead of quietly becoming a blank in the listing.
+
+The date, stage and health are stored in exactly one place, this file, and derived from it.
+Nothing is copied into `artifact.yaml`, because two copies of the same fact drift and this is the copy an engineer actually edits.
+
 ## Stage
 
 One word, from this list and no other.
@@ -92,4 +111,4 @@ Two things are unresolved, and both belong to whoever owns this domain rather th
 
 **Access is broad by construction.** Every caller who can reach the MCP sees every domain; per-identity scoping is deferred to a separate issue. Customer names, scope, rates and slipped commitments in this domain are readable by anyone with access to the server. For real engagements that has to be checked against the NDA or AVV in force before the content is written, not after.
 
-**Freshness is unenforced.** Nothing currently fails when a `status.md` goes stale. The as-of date makes staleness visible to a reader, which is the important half, but it does not make it visible to anyone who is not reading. A freshness signal belongs with the update mechanism, which is why it is not bolted onto the validation gate now.
+**Freshness is unenforced.** Nothing currently fails when a `status.md` goes stale. The as-of date makes staleness visible to a reader, and now also computable from the domain listing without opening anything, so a stale project can be found in one call. What is still missing is anyone being told: nothing pushes, and a status nobody asks about can rot quietly. That belongs with the update mechanism rather than with the validation gate, which cannot know what "too old" means for a given project.

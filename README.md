@@ -83,11 +83,38 @@ Every project uses the same file layout, and that uniformity is the point: it is
 `REQUIRED_ARTIFACT_FILES` in [scripts/validate_context.py](scripts/validate_context.py) enforces the required three, as data rather than a per-domain branch so the next domain needing a shape is a dictionary entry.
 `decisions.md` and `timeline.md` are deliberately not required: a project in discovery has settled no arguments and committed to no dates, and empty files would be worse than absent ones.
 
+### Listing projects, and why there is no `list_projects` tool
+
+`get_domain_manifest("projects")` **is** the listing tool.
+A per-domain listing tool would duplicate it and cost a property worth keeping: `list_domains` is the single cold-start entry point, adding a domain touches no tool signature, and once `list_projects` exists the next question is why not `list_policies`.
+
+What the listing did lack was status.
+The manifest carries id, title, kind and description, while stage and health live inside `status.md`, so "which projects are at risk" would have meant fetching every project in full and reading prose.
+
+So the packager lifts the `status.md` header into the manifest as a `progress` object, exactly as it already derives `version_id` by running git at package time:
+
+```json
+{ "id": "dhl-cbs", "title": "DHL CBS",
+  "progress": { "as_of": "2026-08-28", "stage": "delivery", "health": "at risk" } }
+```
+
+Derived rather than duplicated into `artifact.yaml`, because two copies of a fact drift and `status.md` is the one an engineer actually edits.
+One call now answers which projects are off track, what sits in each stage, and whose status has gone stale.
+`progress` is present only on artifacts that have a `status.md`, so its presence is the check for "does this report progress" and no other domain carries dead keys.
+[scripts/status_header.py](scripts/status_header.py) defines the format once, because the gate and the packager reading it separately would drift.
+
+When the portfolio grows this manifest is what grows with it, since it is O(projects).
+The pressure valve is `closed` and `stopped` projects, which stay readable but should eventually move out of the live listing rather than the tool gaining a filter argument.
+
 **Every status, team and timeline file must carry an `**As of YYYY-MM-DD**` line, and the validator fails without it.**
 This is the one rule in the domain that is about correctness rather than tidiness.
 `version_id` is opaque by design, compared for equality and never parsed, so it cannot tell an agent that a status is three months old.
 Without a date in the content a stale status answers confidently and nobody can tell, which is precisely the wrong answer this repo exists to make impossible.
 An agent answering from this domain is expected to say the date: not "the project is at risk" but "as of 28 August it was at risk".
+
+`**Stage:**` and `**Health:**` are gated the same way, against closed vocabularies.
+Free text is what defeats the reason those fields exist: `in progress`, `ongoing` and `phase 2` are all answers somebody would write for stage, and none of them compares to anything.
+A value outside the vocabulary is dropped rather than guessed, so it fails the gate instead of reaching the manifest as a plausible-looking null.
 
 Note the fetch granularity.
 `get_artifact` returns every file in the folder in one call, so the file split serves human editing and precise quoting, not fetch size.
@@ -104,7 +131,7 @@ Usage records are keyed on domain plus id, so a rename also splits an artifact's
 
 ```bash
 make install     # .venv + dependencies
-make test        # 150 tests
+make test        # 160 tests
 make demo        # walk the acceptance demo end to end
 make serve-http  # MCP server on http://127.0.0.1:8000/mcp
 make inspector   # serve, and open MCP Inspector against it
@@ -121,6 +148,8 @@ domains/<domain>/                   the content. One folder per domain, one per 
     README.md                       required entry document
 scripts/validate_context.py         the gate. Collects every failure, never stops at the first.
 scripts/package_context.py          tar.gz + per-domain _manifest.json + per-artifact version_id
+scripts/status_header.py            the status.md header format. Defined once; the gate and
+                                    the packager both read it, so they cannot drift.
 scripts/demo.py                     the acceptance demo, over a real MCP client
 scripts/usage_report.py             reads logs/usage.jsonl
 server/artifacts.py                 the read path. Lifts into ki-mcp unchanged.
@@ -153,7 +182,7 @@ Repository size risk is entirely a binaries risk, and the allow-list removes it.
 | Tool | Returns |
 |---|---|
 | `list_domains()` | one row per domain, forever. The cold-start entry point. |
-| `get_domain_manifest(domain)` | one row per artifact, with descriptions to choose from. No file bodies. |
+| `get_domain_manifest(domain)` | one row per artifact, with descriptions to choose from. No file bodies. Carries `progress` for artifacts that report it, which is what makes it the project listing. |
 | `get_artifact(domain, ids)` | full text. Accepts one id or a list; each is answered independently. |
 | `report_gap(domain, topic)` | records that the manifest had no answer, so the gap can be written up. |
 

@@ -185,6 +185,11 @@ def _artifact_entry(
     return {
         "status": "found",
         **{k: row.get(k) for k in ("id", "title", "kind", "description", "class", "owner")},
+        # Present only for artifacts that report progress. The same fields are in
+        # `status.md` below, but structured, so an agent reads the stage instead of
+        # parsing prose for it. Named `progress` because `status` is taken by
+        # found/not_found on this same entry.
+        **({"progress": row["progress"]} if "progress" in row else {}),
         "version_id": row.get("version_id"),
         "file_count": len(files),
         "files": files,

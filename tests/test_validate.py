@@ -66,8 +66,12 @@ def test_a_domain_outside_the_agreed_partition_is_rejected(source_tree: Path):
     assert any("operations" in e and "KNOWN_DOMAINS" in e for e in errors), errors
 
 
-def _project(source_tree: Path, artifact_id: str, **files: str) -> Path:
-    """A projects-domain artifact, valid unless a caller leaves something out."""
+GOOD_STATUS = "# S\n\n**As of 2026-08-28.**\n**Stage:** delivery.\n**Health:** on track.\n"
+GOOD_TEAM = "# T\n\n**As of 2026-08-28.**\n"
+
+
+def _project(source_tree: Path, artifact_id: str = "dhl-cbs", **files: str) -> Path:
+    """A valid projects-domain artifact. Each test overrides only what it is testing."""
     projects = source_tree / "domains" / "projects"
     projects.mkdir(exist_ok=True)
     (projects / "domain.yaml").write_text(
@@ -76,46 +80,62 @@ def _project(source_tree: Path, artifact_id: str, **files: str) -> Path:
     write_artifact(
         projects,
         artifact_id,
-        artifact__yaml="title: P\nkind: project\ndescription: A project.\n",
-        README__md="# P\n",
-        **files,
+        **{
+            "artifact__yaml": "title: P\nkind: project\ndescription: A project.\n",
+            "README__md": "# P\n",
+            "status__md": GOOD_STATUS,
+            "team__md": GOOD_TEAM,
+            **files,
+        },
     )
     return projects / artifact_id
 
 
-def test_a_project_without_the_required_files_is_rejected(source_tree: Path):
+def test_a_fully_formed_project_passes(source_tree: Path):
+    _project(source_tree)
+
+    assert validate(source_tree) == []
+
+
+def test_a_project_missing_a_required_file_is_rejected(source_tree: Path):
     """Uniform layout is what lets one question be answered from one file."""
-    _project(source_tree, "dhl-cbs", status__md="# S\n\n**As of 2026-08-28.**\n")
+    project = _project(source_tree)
+    (project / "team.md").unlink()
 
     errors = validate(source_tree)
 
-    assert any("team.md" in e for e in errors), errors
+    assert any("team.md" in e and "missing" in e for e in errors), errors
     assert not any("status.md" in e for e in errors), errors
 
 
 def test_a_project_status_without_an_as_of_date_is_rejected(source_tree: Path):
     """version_id is opaque, so only the content can carry recency."""
-    _project(
-        source_tree,
-        "dhl-cbs",
-        status__md="# S\n\nStage: delivery.\n",
-        team__md="# T\n\n**As of 2026-08-28.**\n",
-    )
+    _project(source_tree, status__md="# S\n\n**Stage:** delivery.\n**Health:** on track.\n")
 
     errors = validate(source_tree)
 
     assert any("status.md" in e and "As of" in e for e in errors), errors
 
 
-def test_a_fully_formed_project_passes(source_tree: Path):
+def test_a_status_stage_outside_the_vocabulary_is_rejected(source_tree: Path):
+    """Free text defeats the reason the field exists, which is comparing projects."""
     _project(
         source_tree,
-        "dhl-cbs",
-        status__md="# S\n\n**As of 2026-08-28.**\nStage: delivery.\n",
-        team__md="# T\n\n**As of 2026-08-28.**\n",
+        status__md="# S\n\n**As of 2026-08-28.**\n**Stage:** in progress.\n**Health:** on track.\n",
     )
 
-    assert validate(source_tree) == []
+    errors = validate(source_tree)
+
+    assert any("Stage" in e and "discovery" in e for e in errors), errors
+    # team.md carries no stage and must not be asked for one.
+    assert not any("Health" in e or "team.md" in e for e in errors), errors
+
+
+def test_a_status_with_no_health_line_is_rejected(source_tree: Path):
+    """Stage and health are separate: a project can be in delivery and in trouble."""
+    _project(source_tree, status__md="# S\n\n**As of 2026-08-28.**\n**Stage:** delivery.\n")
+
+    assert any("Health" in e and "at risk" in e for e in validate(source_tree))
 
 
 def test_required_files_apply_only_to_the_domains_that_declare_them(source_tree: Path):

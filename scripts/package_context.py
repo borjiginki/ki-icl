@@ -30,7 +30,16 @@ import os
 import shutil
 import subprocess
 import tarfile
+import sys
 from pathlib import Path
+
+# Run directly (`python3 scripts/package_context.py`) and only scripts/ lands on
+# sys.path, so the repo root has to be put there before `scripts.status_header` can be
+# imported. The tests import this module as `scripts.package_context`, so a bare
+# `import status_header` would work in one case and fail in the other.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from scripts import status_header  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT / "dist" / "context"
@@ -63,20 +72,40 @@ def _read_yaml(path: Path) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
+def _progress(artifact_dir: Path) -> dict | None:
+    """The status header lifted out of `status.md`, or None for an artifact without one.
+
+    Derived here rather than duplicated into artifact.yaml, for the same reason
+    version_id is derived: two copies of a fact drift, and status.md is the one an
+    engineer actually edits. This is what lets `get_domain_manifest` answer "which
+    projects are at risk" without fetching every project in full.
+
+    Deliberately not keyed on the domain. Any artifact carrying a status.md gets its
+    header lifted, so a second domain that needs one needs no change here.
+    """
+    status = artifact_dir / "status.md"
+    if not status.is_file():
+        return None
+    return status_header.parse(status.read_text(encoding="utf-8"))
+
+
 def _domain_manifest(root: Path, domain_dir: Path) -> dict:
     domain = _read_yaml(domain_dir / "domain.yaml")
     artifacts = []
     for artifact_dir in sorted(d for d in domain_dir.iterdir() if d.is_dir()):
         meta = _read_yaml(artifact_dir / "artifact.yaml")
-        artifacts.append(
-            {
-                "id": artifact_dir.name,
-                **{f: meta.get(f) for f in MANIFEST_FIELDS},
-                "version_id": _version_id(
-                    root, f"domains/{domain_dir.name}/{artifact_dir.name}"
-                ),
-            }
-        )
+        row = {
+            "id": artifact_dir.name,
+            **{f: meta.get(f) for f in MANIFEST_FIELDS},
+            "version_id": _version_id(
+                root, f"domains/{domain_dir.name}/{artifact_dir.name}"
+            ),
+        }
+        # Present only when there is one, so a presence check answers "does this
+        # artifact report progress" and the other domains carry no dead keys.
+        if (progress := _progress(artifact_dir)) is not None:
+            row["progress"] = progress
+        artifacts.append(row)
     return {
         "domain": domain_dir.name,
         "description": domain.get("description", ""),

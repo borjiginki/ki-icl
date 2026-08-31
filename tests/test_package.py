@@ -89,6 +89,31 @@ def test_the_optional_class_field_is_carried_through(source_tree: Path, tmp_path
     assert rows["expense-policy"]["class"] is None
 
 
+def test_a_status_header_is_lifted_into_the_manifest(source_tree: Path, tmp_path: Path):
+    """This is what lets `get_domain_manifest` answer "which projects are at risk".
+
+    Derived at package time rather than duplicated into artifact.yaml, for the same
+    reason version_id is derived: two copies of a fact drift.
+    """
+    workshop = source_tree / "domains" / "company" / "discovery-workshop"
+    (workshop / "status.md").write_text(
+        "**As of 2026-08-28.**\n**Stage:** delivery.\n**Health:** at risk.\n",
+        encoding="utf-8",
+    )
+    out, stage = tmp_path / "dist", tmp_path / "stage"
+
+    build(source_tree, out, stage)
+    rows = {a["id"]: a for a in _manifest_in(stage, "company")["artifacts"]}
+
+    assert rows["discovery-workshop"]["progress"] == {
+        "as_of": "2026-08-28",
+        "stage": "delivery",
+        "health": "at risk",
+    }
+    # No status.md, so no dead key. Presence answers "does this report progress".
+    assert "progress" not in rows["expense-policy"]
+
+
 def test_the_packaged_output_is_exactly_what_the_read_path_serves(tmp_path: Path, monkeypatch):
     """End to end over this repo's real content: package it, then walk it the way an
     agent does, discovering every id rather than knowing one. Deliberately names no
