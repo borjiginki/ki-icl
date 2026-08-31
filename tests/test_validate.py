@@ -81,7 +81,7 @@ def _project(source_tree: Path, artifact_id: str = "dhl-cbs", **files: str) -> P
         projects,
         artifact_id,
         **{
-            "artifact__yaml": "title: P\nkind: project\ndescription: A project.\n",
+            "artifact__yaml": "title: P\nkind: project\nreview: demo\ndescription: A project.\n",
             "README__md": "# P\n",
             "status__md": GOOD_STATUS,
             "team__md": GOOD_TEAM,
@@ -157,6 +157,26 @@ def test_an_empty_required_field_is_rejected(source_tree: Path):
     )
 
     assert any("description" in e for e in validate(source_tree))
+
+
+def test_a_review_state_outside_the_vocabulary_is_rejected(source_tree: Path):
+    (source_tree / "domains" / "company" / "expense-policy" / "artifact.yaml").write_text(
+        "title: E\nkind: guideline\nreview: probably fine\ndescription: What we reimburse.\n",
+        encoding="utf-8",
+    )
+
+    errors = validate(source_tree)
+
+    assert any("review" in e and "probably fine" in e for e in errors), errors
+
+
+def test_an_artifact_with_no_review_state_is_rejected(source_tree: Path):
+    """Required, so nothing can be served without saying whether anyone stands behind it."""
+    (source_tree / "domains" / "company" / "expense-policy" / "artifact.yaml").write_text(
+        "title: E\nkind: guideline\ndescription: What we reimburse.\n", encoding="utf-8"
+    )
+
+    assert any("review" in e and "required" in e for e in validate(source_tree))
 
 
 def test_an_oversized_file_is_rejected(source_tree: Path):

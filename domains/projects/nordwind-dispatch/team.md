@@ -29,4 +29,4 @@ Committing engineers before the workshop has produced a scope is how a project g
 Names so that someone asking "who is on this" can reach a person.
 Nothing about individual performance, output, or comparison.
 Progress belongs to the project, never to a person.
-See [project status reporting](../../value-creation/project-status-reporting/README.md).
+See `project-status-reporting` in the `value-creation` domain.

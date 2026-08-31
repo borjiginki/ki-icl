@@ -79,6 +79,40 @@ def test_an_empty_domain_is_served_honestly_and_points_at_report_gap(artifacts, 
     assert "get_artifact" not in payload["fetch_hint"]
 
 
+def test_the_manifest_warns_when_a_row_is_not_approved(artifacts):
+    """The caveat has to travel with the row, not sit in file bodies.
+
+    A cross-artifact question is answered from the manifest without fetching, so an
+    agent following that path never sees a "demo content" banner inside a file. The
+    fixture's rows are unreviewed, which is the normal state of this corpus.
+    """
+    hint = artifacts.domain_manifest_payload("company")["fetch_hint"]
+
+    assert "NOT APPROVED" in hint
+    assert "expense-policy" in hint and "discovery-workshop" in hint
+    assert "never present `demo` content as fact" in hint
+
+
+def test_an_approved_domain_gets_no_caveat(artifacts, catalog):
+    """The warning must be absent when it does not apply, or it becomes noise."""
+    path = catalog / "domains" / "company" / "_manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    for row in manifest["artifacts"]:
+        row["review"] = "approved"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    hint = artifacts.domain_manifest_payload("company")["fetch_hint"]
+
+    assert "NOT APPROVED" not in hint
+    assert "get_artifact" in hint
+
+
+def test_get_artifact_carries_the_review_state(artifacts):
+    entry = artifacts.get_artifact_payload("company", ["expense-policy"])["artifacts"][0]
+
+    assert "review" in entry
+
+
 def test_unknown_domain_manifest_is_not_found_and_names_the_real_domains(artifacts):
     payload = artifacts.domain_manifest_payload("compnay")
 

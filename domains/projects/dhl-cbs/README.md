@@ -57,4 +57,4 @@ This artifact describes the work.
 | What is due when, and what has slipped | [timeline.md](timeline.md) |
 
 The layout is the same for every project in this domain, by convention.
-See [project status reporting](../../value-creation/project-status-reporting/README.md).
+See `project-status-reporting` in the `value-creation` domain.

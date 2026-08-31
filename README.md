@@ -9,13 +9,18 @@ It is not production ready, and the content in `domains/` is placeholder text th
 ## What it is for
 
 Skills tell an assistant *how to perform a task*.
-This tells it *what is true about the company*: methodologies, offerings, guidelines, policy.
+This tells it *what is true about the company*: methodologies, offerings, guidelines, policy, and, since the `projects` domain landed, the current state of the work.
 
 One sentence: **make a markdown file in a git repository fetchable through the KI MCP, by id, with a version stamp.**
 
 The property that matters is that a wrong answer is impossible.
 A lookup is an exact dictionary hit or an honest `not_found`.
 There is no similarity path, no closest match, and no fuzzy-matching code anywhere to be reached.
+
+Holding current state alongside stable documents adds a second way to be wrong, and it is worth naming.
+A governed document is wrong only if it was written wrong; a status is wrong the moment it is out of date, and it looks identical either way.
+`version_id` cannot help, because it is opaque by design and detects change rather than age.
+That is why every file reporting a point in time carries an `**As of YYYY-MM-DD**` line, why the gate rejects one that does not, and why the date is lifted into the manifest so staleness is computable without opening anything.
 
 ## Domains
 
@@ -28,7 +33,7 @@ The six business functions come from the project lead's model.
 | `company` | (addition) | Who KI group is: what it does, how it positions itself, the certifications and regulatory commitments it operates under |
 | `projects` | (addition) | What we are working on right now, one artifact per engagement: goal, scope, stage, health, team, decisions, dates |
 | `value-creation` | Value Creation | Engineering work: methodologies, technical standards, review practices |
-| `value-delivery` | Value Delivery | After-sales communication to the customer: handover, status reporting, escalation |
+| `value-delivery` | Value Delivery | After-sales communication to the customer: handover, escalation, and the conventions for what a customer is told. Never the current state of an engagement, which is `projects` |
 | `marketing` | Marketing | Creating awareness: positioning, messaging, content, events, campaigns |
 | `sales` | Sales | Offers, estimation and man day rates, pricing, contract shape |
 | `finance` | Finance | Budgets, invoicing, cost and expense rules, approval thresholds, reporting |
@@ -131,7 +136,7 @@ Usage records are keyed on domain plus id, so a rename also splits an artifact's
 
 ```bash
 make install     # .venv + dependencies
-make test        # 160 tests
+make test        # 165 tests
 make demo        # walk the acceptance demo end to end
 make serve-http  # MCP server on http://127.0.0.1:8000/mcp
 make inspector   # serve, and open MCP Inspector against it
@@ -167,8 +172,9 @@ server/mcp_server.py                throwaway harness. Replaced by ki-mcp's tool
 ## Adding an artifact
 
 1. Pick the domain whose team will own the document, per the routing rule above, then `mkdir domains/<domain>/<kebab-case-id>/`.
-2. Write `artifact.yaml` with `title`, `kind` and `description`.
+2. Write `artifact.yaml` with `title`, `kind`, `description` and `review`.
    The `description` is what an agent reads to decide whether to fetch, so write it as a "when to use" signal, not a label.
+   `review` is one of `demo`, `draft` or `approved`, and is required. See below.
 3. Write `README.md`. Supporting files may nest freely, and must be text.
 4. `make validate`, then open a pull request.
 
@@ -176,6 +182,34 @@ Text only: `.md`, `.yaml`, `.yml`, `.json`, `.txt`, `.csv`, 1 MiB per file.
 This is not a style preference.
 Measured on the existing skills catalog, 147 markdown files are 1.73 MB while the binaries beside them are 15.32 MB.
 Repository size risk is entirely a binaries risk, and the allow-list removes it.
+
+## `review`: whether anyone stands behind it
+
+Every artifact declares one of three states, and the validator rejects anything else:
+
+| `review` | Means |
+|---|---|
+| `demo` | Invented content that exists to exercise the pipeline. Must never be repeated as fact about the company. |
+| `draft` | Real subject, written but not reviewed by an owner. |
+| `approved` | An owner has reviewed it and stands behind it. |
+
+Nothing here is `approved` yet.
+
+Required rather than optional, and the reason is a failure that was observed rather than imagined.
+This README has always opened by saying the content is unreviewed placeholder text, and **no caller of the API could ever see that**.
+A manifest row reads as settled fact whatever its provenance, and since the row is now the whole answer to a portfolio question, an agent asked "which projects are not on track" would answer from invented data with nothing anywhere to contradict it.
+The disclaimers sat in the file bodies, which the recommended path never opens.
+
+So the state is served on the row, and `get_domain_manifest` appends a caveat naming the unapproved artifacts:
+
+```
+Fetch with `get_artifact("projects", ["<id>"])`. NOT APPROVED: `demo` (dhl-cbs,
+nordwind-dispatch). Say so in any answer drawn from these, and never present
+`demo` content as fact.
+```
+
+The caveat travels with the row that needs it, because an instruction an agent read once at connection time loses to a payload that looks like fact.
+Leaving the field optional would have restored the hole for every artifact that omitted it, which is why it is required instead.
 
 ## The three tools
 

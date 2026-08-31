@@ -22,7 +22,7 @@ Nothing has been quoted and nothing has been committed.
 Scope, budget, and delivery shape.
 Discovery exists to produce the estimate, so committing to any of them now would make the workshop decorative.
 
-See [discovery workshop](../../value-creation/discovery-workshop/README.md) for how this phase runs.
+See `discovery-workshop` in the `value-creation` domain for how this phase runs.
 
 ## Where to look next
 

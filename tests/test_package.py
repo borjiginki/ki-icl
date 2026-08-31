@@ -56,7 +56,8 @@ def test_each_domain_manifest_is_sorted_by_id_and_stamps_every_artifact(
     for row in manifest["artifacts"]:
         assert row["version_id"]
         assert set(row) == {
-            "id", "title", "kind", "description", "class", "owner", "version_id",
+            "id", "title", "kind", "description", "review", "class", "owner",
+            "version_id",
         }
 
 

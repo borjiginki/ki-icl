@@ -119,6 +119,28 @@ def list_domains_payload() -> dict[str, Any]:
     }
 
 
+def _review_caveat(rows: list[dict[str, Any]]) -> str:
+    """A warning naming the unapproved rows, or "" when every row is approved.
+
+    Attached to the manifest rather than left to the instructions because this is the
+    payload an agent answers a cross-artifact question from. A row reads as settled
+    fact whatever its provenance, and the caveat has to travel with the row that
+    needs it: an agent that never opens the files never sees the "demo content"
+    banner inside them, which is exactly how invented data gets repeated as true.
+    """
+    unapproved = sorted(
+        {row.get("review") for row in rows if row.get("review") not in (None, "approved")}
+    )
+    if not unapproved:
+        return ""
+    ids = {
+        state: [r["id"] for r in rows if r.get("review") == state] for state in unapproved
+    }
+    return " NOT APPROVED: " + "; ".join(
+        f"`{state}` ({', '.join(sorted(found))})" for state, found in ids.items()
+    ) + ". Say so in any answer drawn from these, and never present `demo` content as fact."
+
+
 def domain_manifest_payload(domain: str) -> dict[str, Any]:
     """One domain's metadata plus one row per artifact. No file bodies."""
     for name, _, manifest in _described_domains():
@@ -134,6 +156,7 @@ def domain_manifest_payload(domain: str) -> dict[str, Any]:
                 # useful thing it can do here, and the only way this domain learns.
                 "fetch_hint": (
                     f'Fetch with `get_artifact("{name}", ["<id>"])`.'
+                    + _review_caveat(rows)
                     if rows
                     else (
                         f"Nothing is published in `{name}` yet. Tell the user it is not "
@@ -184,7 +207,7 @@ def _artifact_entry(
 
     return {
         "status": "found",
-        **{k: row.get(k) for k in ("id", "title", "kind", "description", "class", "owner")},
+        **{k: row.get(k) for k in ("id", "title", "kind", "description", "review", "class", "owner")},
         # Present only for artifacts that report progress. The same fields are in
         # `status.md` below, but structured, so an agent reads the stage instead of
         # parsing prose for it. Named `progress` because `status` is taken by

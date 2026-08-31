@@ -1,6 +1,8 @@
 id: value-delivery
 description: >-
-  How KI group communicates with a customer after the sale: handover, status
-  reporting, escalation, and account communication. Look here when the question
-  is what the customer is told, by whom, and when, rather than what the
-  engineering work itself involves.
+  How KI group communicates with a customer after the sale: handover, escalation,
+  account communication, and the conventions for what a customer is told, by whom,
+  and when. Look here when the question is about the communication itself. For how
+  a specific engagement is actually going, or which engagements are at risk, use
+  the `projects` domain instead: this domain holds the conventions and never the
+  current state of any project.

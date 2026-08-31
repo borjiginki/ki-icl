@@ -52,6 +52,7 @@ def catalog(tmp_path: Path) -> Path:
                         "id": "discovery-workshop",
                         "title": "Discovery workshop",
                         "kind": "methodology",
+                        "review": "draft",
                         "description": "How we run discovery.",
                         "class": "functional",
                         "owner": None,
@@ -61,6 +62,7 @@ def catalog(tmp_path: Path) -> Path:
                         "id": "expense-policy",
                         "title": "Expense policy",
                         "kind": "guideline",
+                        "review": "draft",
                         "description": "What we reimburse.",
                         "class": None,
                         "owner": None,
@@ -95,14 +97,17 @@ def source_tree(tmp_path: Path) -> Path:
     write_artifact(
         company,
         "expense-policy",
-        artifact__yaml="title: Expense policy\nkind: guideline\ndescription: What we reimburse.\n",
+        artifact__yaml=(
+            "title: Expense policy\nkind: guideline\nreview: draft\n"
+            "description: What we reimburse.\n"
+        ),
         README__md="# Expense policy\n",
     )
     write_artifact(
         company,
         "discovery-workshop",
         artifact__yaml=(
-            "title: Discovery workshop\nkind: methodology\n"
+            "title: Discovery workshop\nkind: methodology\nreview: draft\n"
             "description: How we run discovery.\nclass: functional\n"
         ),
         README__md="# Discovery workshop\n",

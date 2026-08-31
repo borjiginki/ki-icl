@@ -17,6 +17,10 @@ That uniformity is the whole point: it is what lets a question be answered from 
 | `decisions.md` | What was decided and why, and what it cost | When a decision is taken |
 | `timeline.md` | What is due when, and what has slipped | When a date moves |
 
+Links between files inside one project are relative paths, and they work, because a fetch returns the whole folder.
+A reference to a **different** artifact is written as a domain and an id, never as a path: `project-status-reporting` in the `value-creation` domain, not `../../value-creation/project-status-reporting/README.md`.
+A path is not something `get_artifact` can follow, so it reads as a dead end to the one consumer that matters.
+
 `README.md`, `status.md` and `team.md` are required.
 `decisions.md` and `timeline.md` appear when there is something true to put in them: a project in discovery has committed to no dates and settled no arguments, and empty files would be worse than absent ones.
 

@@ -53,7 +53,20 @@ REQUIRED_ARTIFACT_FILES: dict[str, tuple[str, ...]] = {
     "projects": ("status.md", "team.md"),
 }
 ID_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
-REQUIRED_ARTIFACT_FIELDS = ("title", "kind", "description")
+REQUIRED_ARTIFACT_FIELDS = ("title", "kind", "description", "review")
+
+# Required, not optional, and this is the reason: the README has always said the
+# content here is unreviewed placeholder text, and no caller could ever see that. A
+# manifest row reads as settled fact whatever its provenance, and the row is now the
+# whole answer to a portfolio question, so an unreviewed document gets repeated as
+# true with nothing anywhere to contradict it. Serving the field makes that
+# impossible to do by accident; leaving it optional would make it possible again for
+# every artifact that omitted it.
+REVIEW_STATES = {
+    "demo": "invented content that exists to exercise the pipeline",
+    "draft": "real subject, written but not reviewed by an owner",
+    "approved": "an owner has reviewed it and stands behind it",
+}
 
 # `status.md` carries a header the packager lifts into the manifest, so it is gated
 # here against the same definitions the packager derives from. Two copies of the
@@ -146,6 +159,11 @@ def _validate_artifact(artifact_dir: Path, seen: set[str], errors: list[str]) ->
     elif (data := _load_yaml(artifact_yaml, errors)) is not None:
         for field in REQUIRED_ARTIFACT_FIELDS:
             _non_empty(data, field, artifact_yaml, errors)
+        if (review := data.get("review")) is not None and review not in REVIEW_STATES:
+            errors.append(
+                f"{label}/artifact.yaml: `review` is {review!r}, which is not one of "
+                + ", ".join(f"`{k}` ({v})" for k, v in REVIEW_STATES.items())
+            )
 
     if not (artifact_dir / "README.md").is_file():
         errors.append(f"{label}/: missing README.md (the entry document is required)")

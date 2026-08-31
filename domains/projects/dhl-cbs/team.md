@@ -36,4 +36,4 @@ Progress belongs to the project and is reported in [status.md](status.md), never
 
 That boundary is not a style preference.
 Under German law a record that lets an employer assess individual performance is personal data with a works council dimension, and building it as a side effect of status reporting would be the wrong way to arrive at it.
-See [project status reporting](../../value-creation/project-status-reporting/README.md).
+See `project-status-reporting` in the `value-creation` domain.

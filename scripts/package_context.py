@@ -29,8 +29,8 @@ import json
 import os
 import shutil
 import subprocess
-import tarfile
 import sys
+import tarfile
 from pathlib import Path
 
 # Run directly (`python3 scripts/package_context.py`) and only scripts/ lands on
@@ -45,7 +45,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT / "dist" / "context"
 STAGE_DIR = ROOT / "dist" / "staging"
 
-MANIFEST_FIELDS = ("title", "kind", "description", "class", "owner")
+MANIFEST_FIELDS = ("title", "kind", "description", "review", "class", "owner")
 
 
 def _version_id(root: Path, rel_path: str) -> str:

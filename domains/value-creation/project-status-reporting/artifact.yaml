@@ -1,5 +1,6 @@
 title: Project status reporting
 kind: methodology
+review: draft
 description: >-
   How a project artifact in the `projects` domain is laid out, what the stage and
   health vocabularies mean, and the rules an update has to follow. Use when
