@@ -13,6 +13,7 @@ help:
 	@echo "  demo        package, then walk the acceptance demo end to end"
 	@echo "  inspector   serve over HTTP and open MCP Inspector against it"
 	@echo "  usage       summarise logs/usage.jsonl: what was looked up, and what was missed"
+	@echo "  dashboard   serve the usage dashboard on :8010, reading the log live"
 
 install:
 	python3 -m venv .venv
@@ -53,6 +54,11 @@ inspector: package
 
 usage:
 	@$(PY) scripts/usage_report.py
+
+DASHBOARD_PORT ?= 8010
+
+dashboard:
+	@DASHBOARD_PORT=$(DASHBOARD_PORT) $(PY) scripts/dashboard.py
 
 demo: package
 	CONTEXT_ROOT=dist/staging $(PY) scripts/demo.py

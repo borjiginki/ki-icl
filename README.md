@@ -100,6 +100,28 @@ Two properties worth keeping:
 
 Sinks are stderr plus `logs/usage.jsonl`. Set `CONTEXT_USAGE_LOG=""` to leave stderr as the only one, which is what production wants: stdout is already collected by Log Analytics and a file would be a second store to own.
 
+### The dashboard
+
+`make dashboard` serves [scripts/dashboard.py](scripts/dashboard.py) on `:8010`.
+It reads the log file directly, so it needs no MCP server running, and it re-polls every three seconds so records appear while you test.
+
+All aggregation is pure Python functions over a list of records, covered by tests; [server/dashboard.html](server/dashboard.html) only renders what it is handed.
+
+| Panel | The question it answers |
+|---|---|
+| What to write next | Which ids were asked for and not found, ranked by demand, and whether each ever existed |
+| Artifacts served | What people actually read, and the bytes it cost |
+| Discovery funnel | Of the sessions that browsed, how many could choose something. Sessions that already knew an id are counted separately as `direct` |
+| Chosen against offered | Which descriptions win when an agent has to pick |
+| Versions served | Which versions went out, flagged when an artifact changed mid-window |
+| Latency, size against time | Whether payload size is what costs time |
+
+Three decisions in there worth not undoing:
+
+- **The funnel is conditional.** Each step counts only sessions that reached the previous one. Counting them independently would let a session that already knew an id mask the drop-off the panel exists to show.
+- **Errors are excluded from latency.** A call that raised is not a measurement of service time, and one slow failure drags p95 far enough to flatten every other bar.
+- **Percentiles are nearest-rank.** `statistics.quantiles` defaults to the exclusive method, which extrapolates past the data: a six-sample p95 came out at 25.7 ms when the slowest call measured was 3.7 ms.
+
 ## Connecting a client
 
 ```bash

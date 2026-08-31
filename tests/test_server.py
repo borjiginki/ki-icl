@@ -90,4 +90,7 @@ async def test_the_script_runs_as_a_subprocess_the_way_a_stdio_client_launches_i
 
     assert {"list_domains", "get_domain_manifest", "get_artifact"} <= names
     assert json.loads(result.content[0].text)["domains"][0]["id"] == "company"
-    assert json.loads(usage_log.read_text())["tool"] == "list_domains"
+    # First line is the startup catalog snapshot; the call follows it.
+    lines = [json.loads(line) for line in usage_log.read_text().strip().splitlines()]
+    assert lines[0]["event"] == "catalog"
+    assert lines[-1]["tool"] == "list_domains"

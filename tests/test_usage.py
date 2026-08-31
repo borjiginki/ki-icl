@@ -44,6 +44,8 @@ def test_a_hit_records_the_id_the_outcome_and_the_version_served():
         "outcome": "found",
         "version_id": "b0f9dd0a",
         "file_count": 2,
+        "bytes": 0,
+        "skipped": 0,
     }
 
 
@@ -94,6 +96,7 @@ def test_a_manifest_read_records_the_domain_and_how_much_it_offered():
         "domain": "company",
         "outcome": "found",
         "artifact_count": 2,
+        "offered": ["a", "b"],
     }
 
 

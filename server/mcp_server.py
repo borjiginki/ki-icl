@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fastmcp import FastMCP  # noqa: E402
 
 from server import artifacts  # noqa: E402
-from server.usage import ContextUsageMiddleware  # noqa: E402
+from server.usage import USAGE_LOG, ContextUsageMiddleware, catalog_record  # noqa: E402
 
 mcp = FastMCP(
     name="ki-icl",
@@ -82,6 +82,9 @@ def get_artifact(domain: str, ids: str | list[str], max_file_bytes: int = 1_048_
 
 if __name__ == "__main__":
     print(f"serving {artifacts.ARTIFACTS_ROOT}", file=sys.stderr)
+    # One snapshot of what exists, so the dashboard can tell a miss for something that
+    # never existed from a miss for something that was deleted.
+    USAGE_LOG.write(catalog_record(artifacts.ARTIFACTS_ROOT))
     if "--http" in sys.argv:
         mcp.run(transport="http", host="127.0.0.1", port=8000)
     else:

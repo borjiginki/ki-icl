@@ -1,0 +1,430 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ki-icl context usage</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  /* Palette from the dataviz reference instance, validated with validate_palette.js:
+     categorical slots 1-2 for the two-series latency chart, a blue ordinal ramp for
+     the funnel, and the reserved status palette for found / missed / error. */
+  :root {
+    --surface: #fcfcfb; --panel: #ffffff; --line: #e6e5e2;
+    --ink: #1a1a19; --ink-2: #56544e; --ink-3: #84817a;
+    --cat-1: #2a78d6; --cat-2: #eb6834;
+    --ord-1: #86b6ef; --ord-2: #2a78d6; --ord-3: #1c5cab;
+    --good: #0ca30c; --warn: #fab219; --crit: #d03b3b;
+    --seq: #2a78d6; --seq-soft: #cde2fb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface: #131312; --panel: #1a1a19; --line: #2f2e2b;
+      --ink: #f2f1ee; --ink-2: #b3b0a8; --ink-3: #84817a;
+      --cat-1: #3987e5; --cat-2: #d95926;
+      --ord-1: #86b6ef; --ord-2: #3987e5; --ord-3: #184f95;
+      --seq: #3987e5; --seq-soft: #184f95;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: var(--surface); color: var(--ink);
+    font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+  }
+  h1 { font-size: 18px; margin: 0 0 2px; letter-spacing: -0.01em; }
+  .sub { color: var(--ink-3); font-size: 12px; margin-bottom: 18px; }
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 18px; }
+  select, button {
+    font: inherit; font-size: 13px; padding: 5px 10px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer;
+  }
+  button[aria-pressed="true"] { border-color: var(--seq); color: var(--seq); }
+  /* align-items:start so a tall panel does not stretch its short neighbours. */
+  .grid { display: grid; gap: 14px; align-items: start;
+          grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px;
+    min-width: 0;
+  }
+  .panel.wide { grid-column: 1 / -1; }
+  .panel h2 { font-size: 13px; margin: 0 0 2px; font-weight: 600; }
+  .note { color: var(--ink-3); font-size: 11.5px; margin: 0 0 12px; }
+  .kpis { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); margin-bottom: 14px; }
+  .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+  .kpi .v { font-size: 26px; font-weight: 620; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .kpi .k { font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.04em; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th { text-align: left; font-size: 11px; color: var(--ink-3); font-weight: 600; padding: 0 8px 6px 0;
+       text-transform: uppercase; letter-spacing: 0.04em; }
+  td { padding: 6px 8px 6px 0; border-top: 1px solid var(--line); font-size: 13px; }
+  td.n, th.n { text-align: right; }
+  .id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+  .tag { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding: 1px 7px;
+         border-radius: 999px; border: 1px solid var(--line); color: var(--ink-2); white-space: nowrap; }
+  .empty { color: var(--ink-3); font-size: 13px; padding: 10px 0; }
+  .scroll { overflow-x: auto; }
+  svg { display: block; overflow: visible; }
+  .axis { stroke: var(--line); }
+  .lab { fill: var(--ink-3); font-size: 10.5px; }
+  .val { fill: var(--ink); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .legend { display: flex; gap: 14px; font-size: 11.5px; color: var(--ink-2); margin: 8px 0 0; flex-wrap: wrap; }
+  .legend i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; margin-right: 5px; }
+  #tip {
+    position: fixed; pointer-events: none; opacity: 0; transition: opacity .1s;
+    background: var(--ink); color: var(--surface); font-size: 12px; padding: 5px 8px;
+    border-radius: 6px; z-index: 9; white-space: nowrap;
+  }
+</style>
+
+<h1>Context usage</h1>
+<div class="sub" id="meta">loading…</div>
+
+<div class="bar">
+  <select id="range">
+    <option value="0">All time</option>
+    <option value="1">Last hour</option>
+    <option value="24">Last 24 hours</option>
+    <option value="168">Last 7 days</option>
+  </select>
+  <select id="domain"><option value="">All domains</option></select>
+  <button id="pause" aria-pressed="false">Live</button>
+</div>
+
+<div class="kpis" id="kpis"></div>
+
+<div class="grid">
+  <section class="panel wide">
+    <h2>What to write next</h2>
+    <p class="note">Asked for and not found, ranked by demand. Nothing else in the system carries this signal.</p>
+    <div id="misses"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Artifacts served</h2>
+    <p class="note">Times fetched, and the bytes that cost.</p>
+    <div id="served"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Discovery funnel</h2>
+    <p class="note">Sessions reaching each step, each counted only if it reached the one before.</p>
+    <div id="funnel"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Activity</h2>
+    <p class="note">Fetches per hour, split by outcome.</p>
+    <div id="activity"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Chosen against offered</h2>
+    <p class="note">Shown in a manifest, then actually fetched. The only feedback there is on description quality.</p>
+    <div id="offered"></div>
+  </section>
+
+  <section class="panel wide">
+    <h2>Versions served</h2>
+    <p class="note">What the server sent. It cannot see what a client still holds cached, and does not claim to.</p>
+    <div id="versions"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Latency by tool</h2>
+    <p class="note">Milliseconds, successful calls only. Failures are counted on the errors tile.</p>
+    <div id="latency"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Payload size against time</h2>
+    <p class="note">Whether bytes returned is what costs time.</p>
+    <div id="scatter"></div>
+  </section>
+</div>
+
+<div id="tip"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const tip = $("tip");
+let DATA = null, live = true;
+
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+const nf = n => (n ?? 0).toLocaleString();
+const bytes = b => b >= 1e6 ? (b/1e6).toFixed(1) + " MB" : b >= 1e3 ? (b/1e3).toFixed(1) + " kB" : (b||0) + " B";
+const ago = ts => {
+  if (!ts) return "";
+  const s = (Date.now() - Date.parse(ts)) / 1000;
+  if (!isFinite(s)) return "";
+  if (s < 90) return "just now";
+  if (s < 5400) return Math.round(s/60) + "m ago";
+  if (s < 172800) return Math.round(s/3600) + "h ago";
+  return Math.round(s/86400) + "d ago";
+};
+
+/* Hover layer: every mark gets one, sized bigger than the mark itself. */
+function hover(el, text) {
+  el.addEventListener("pointerenter", e => {
+    tip.textContent = text; tip.style.opacity = 1;
+    tip.style.left = (e.clientX + 12) + "px"; tip.style.top = (e.clientY - 28) + "px";
+  });
+  el.addEventListener("pointermove", e => {
+    tip.style.left = (e.clientX + 12) + "px"; tip.style.top = (e.clientY - 28) + "px";
+  });
+  el.addEventListener("pointerleave", () => { tip.style.opacity = 0; });
+  return el;
+}
+const svg = (w, h) => {
+  const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  s.setAttribute("viewBox", `0 0 ${w} ${h}`); s.setAttribute("width", "100%");
+  s.setAttribute("height", h); return s;
+};
+const node = (name, attrs, text) => {
+  const n = document.createElementNS("http://www.w3.org/2000/svg", name);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+  if (text != null) n.textContent = text;
+  return n;
+};
+const empty = (host, msg) => { host.innerHTML = `<p class="empty">${esc(msg)}</p>`; };
+
+/* --- horizontal bars: magnitude by named category, one sequential hue --------- */
+function hbars(host, rows, { label, value, caption }) {
+  host.innerHTML = "";
+  if (!rows.length) return empty(host, "Nothing yet.");
+  const max = Math.max(...rows.map(value), 1);
+  const rowH = 26, padL = 0, w = 320, barW = 190;
+  const s = svg(w, rows.length * rowH + 4);
+  rows.forEach((r, i) => {
+    const y = i * rowH + 4, len = Math.max(2, (value(r) / max) * barW);
+    s.appendChild(node("text", { x: padL, y: y + 11, class: "lab" }, label(r)));
+    const bar = node("rect", {
+      x: padL, y: y + 15, width: len, height: 7, rx: 3.5, fill: "var(--seq)",
+    });
+    hover(bar, caption(r));
+    s.appendChild(bar);
+    /* Direct label, never a number on every mark of a dense chart - these are few. */
+    s.appendChild(node("text", { x: padL + len + 7, y: y + 22, class: "val" }, nf(value(r))));
+  });
+  host.appendChild(s);
+}
+
+/* --- KPI row: stat tiles, not a one-bar chart -------------------------------- */
+function kpis(k) {
+  const tiles = [
+    ["lookups", nf(k.lookups)],
+    ["hit rate", k.lookups ? k.hit_rate + "%" : "–"],
+    ["artifacts served", nf(k.artifacts)],
+    ["sessions", nf(k.sessions)],
+    ["bytes served", bytes(k.bytes)],
+    ["errors", nf(k.errors)],
+  ];
+  $("kpis").innerHTML = tiles.map(([k2, v]) =>
+    `<div class="kpi"><div class="v">${esc(v)}</div><div class="k">${esc(k2)}</div></div>`).join("");
+}
+
+/* --- panel 1 ----------------------------------------------------------------- */
+function misses(rows) {
+  const host = $("misses");
+  if (!rows.length) return empty(host, "Nothing has been asked for and missed. Either the corpus covers what people want, or nobody has asked yet.");
+  const max = Math.max(...rows.map(r => r.count));
+  host.innerHTML = `<div class="scroll"><table>
+    <tr><th>Artifact</th><th class="n">Asked</th><th class="n">Sessions</th><th>Last</th><th>Status</th></tr>
+    ${rows.map(r => `<tr>
+      <td class="id">${esc(r.key)}
+        <div style="height:4px;margin-top:4px;border-radius:2px;background:var(--seq);width:${(r.count/max*100).toFixed(0)}%"></div>
+      </td>
+      <td class="n">${r.count}</td>
+      <td class="n">${r.sessions || "–"}</td>
+      <td>${esc(ago(r.last))}</td>
+      <td><span class="tag">${r.ever_existed
+        ? "&#9888;&#65039; existed, now gone"
+        : "&#10022; never written"}</span></td>
+    </tr>`).join("")}</table></div>`;
+}
+
+/* --- panel 2 ----------------------------------------------------------------- */
+function funnel(f) {
+  const host = $("funnel");
+  host.innerHTML = "";   /* polled every 3s: append without clearing and it stacks up */
+  const steps = [
+    ["list_domains", f.listed, "var(--ord-1)"],
+    ["get_domain_manifest", f.manifested, "var(--ord-2)"],
+    ["get_artifact", f.fetched, "var(--ord-3)"],
+  ];
+  if (!steps.some(s => s[1])) return empty(host, "No session has been correlated yet.");
+  const max = Math.max(...steps.map(s => s[1]), 1);
+  const w = 320, h = 130, bw = 72, gap = 28;
+  const s = svg(w, h);
+  steps.forEach(([name, n, fill], i) => {
+    const bh = Math.max(3, (n / max) * 84), x = i * (bw + gap), y = 92 - bh;
+    const bar = node("rect", { x, y, width: bw, height: bh, rx: 4, fill });
+    hover(bar, `${n} session${n === 1 ? "" : "s"} reached ${name}`);
+    s.appendChild(bar);
+    s.appendChild(node("text", { x: x + bw / 2, y: y - 6, class: "val", "text-anchor": "middle" }, n));
+    name.split("_").forEach((part, j) =>
+      s.appendChild(node("text", { x: x + bw / 2, y: 106 + j * 11, class: "lab", "text-anchor": "middle" }, part)));
+    if (i) {
+      const prev = steps[i - 1][1];
+      const drop = prev ? Math.round(100 * (prev - n) / prev) : 0;
+      if (drop > 0) s.appendChild(node("text",
+        { x: x - gap / 2, y: 52, class: "lab", "text-anchor": "middle" }, `−${drop}%`));
+    }
+  });
+  host.appendChild(s);
+  host.insertAdjacentHTML("beforeend",
+    `<p class="note" style="margin:10px 0 0">${f.direct} session${f.direct === 1 ? "" : "s"} fetched without discovering: the agent already knew the id.</p>`);
+}
+
+function activity(rows) {
+  const host = $("activity");
+  host.innerHTML = "";
+  if (!rows.length) return empty(host, "No fetches yet.");
+  const show = rows.slice(-24);
+  const max = Math.max(...show.map(r => r.found + r.missed), 1);
+  const w = 320, h = 130, plot = 92;
+  /* Lay out against at least 6 slots. One hour of data spread across the full width
+     reads as a broken chart rather than as a quiet period. */
+  const slots = Math.max(show.length, 6);
+  const step = w / slots;
+  const bw = Math.max(6, Math.min(26, step - 6));
+  const s = svg(w, h);
+  s.appendChild(node("line", { x1: 0, y1: plot, x2: w, y2: plot, class: "axis" }));
+  show.forEach((r, i) => {
+    const x = i * step;
+    let y = plot;
+    /* Stacked, with a 2px surface gap between segments. */
+    [["missed", r.missed, "var(--warn)"], ["found", r.found, "var(--good)"]].forEach(([name, n, fill]) => {
+      if (!n) return;
+      const bh = (n / max) * plot;
+      y -= bh;
+      const rect = node("rect", { x, y, width: bw, height: Math.max(2, bh - 2), rx: 2, fill });
+      hover(rect, `${r.hour.replace("T", " ")}:00 — ${n} ${name}`);
+      s.appendChild(rect);
+      y -= 2;
+    });
+    /* Label sparsely: every bar labelled is noise, none at all is unreadable. */
+    if (i === 0 || i === show.length - 1 || show.length <= 6)
+      s.appendChild(node("text",
+        { x: x + bw / 2, y: plot + 13, class: "lab", "text-anchor": "middle" },
+        r.hour.slice(11) + ":00"));
+  });
+  host.appendChild(s);
+  host.insertAdjacentHTML("beforeend",
+    `<div class="legend"><span><i style="background:var(--good)"></i>found</span>
+     <span><i style="background:var(--warn)"></i>missed</span></div>`);
+}
+
+function offered(rows) {
+  const host = $("offered");
+  if (!rows.length) return empty(host, "No manifest has been read yet.");
+  host.innerHTML = `<div class="scroll"><table>
+    <tr><th>Artifact</th><th class="n">Offered</th><th class="n">Chosen</th><th class="n">Rate</th></tr>
+    ${rows.map(r => `<tr>
+      <td class="id">${esc(r.key)}</td>
+      <td class="n">${r.offered}</td><td class="n">${r.chosen}</td>
+      <td class="n">${r.offered ? Math.round(100 * r.chosen / r.offered) + "%" : "–"}</td>
+    </tr>`).join("")}</table></div>`;
+}
+
+/* --- panel 3 ----------------------------------------------------------------- */
+function versions(rows) {
+  const host = $("versions");
+  if (!rows.length) return empty(host, "Nothing has been served yet.");
+  host.innerHTML = `<div class="scroll"><table>
+    <tr><th>Artifact</th><th>Version</th><th class="n">Served</th><th>First</th><th>Last</th><th></th></tr>
+    ${rows.flatMap(r => r.served.map((v, i) => `<tr>
+      <td class="id">${i === 0 ? esc(r.key) : ""}</td>
+      <td class="id">${esc(v.version_id.slice(0, 10))}</td>
+      <td class="n">${v.count}</td>
+      <td>${esc(ago(v.first))}</td><td>${esc(ago(v.last))}</td>
+      <td>${i === 0 && r.changed ? '<span class="tag">&#9888;&#65039; changed mid-window</span>' : ""}</td>
+    </tr>`)).join("")}</table></div>`;
+}
+
+/* --- panel 4 ----------------------------------------------------------------- */
+function latency(rows) {
+  const host = $("latency");
+  host.innerHTML = "";
+  if (!rows.length) return empty(host, "No timings yet.");
+  const max = Math.max(...rows.map(r => r.p95), 0.1);
+  const w = 320, rowH = 44;
+  const s = svg(w, rows.length * rowH + 6);
+  rows.forEach((r, i) => {
+    const y = i * rowH + 4;
+    s.appendChild(node("text", { x: 0, y: y + 10, class: "lab" }, `${r.tool}  n=${r.n}`));
+    [["p50", r.p50, "var(--cat-1)", 0], ["p95", r.p95, "var(--cat-2)", 11]].forEach(([name, v, fill, dy]) => {
+      const len = Math.max(5, (v / max) * 150);
+      const bar = node("rect", { x: 0, y: y + 15 + dy, width: len, height: 7, rx: 3.5, fill });
+      hover(bar, `${r.tool} ${name} ${v} ms over ${r.n} calls`);
+      s.appendChild(bar);
+      /* Both series direct-labeled, so identity is never colour alone. */
+      s.appendChild(node("text", { x: len + 7, y: y + 22 + dy, class: "val" }, `${name} ${v}ms`));
+    });
+  });
+  host.appendChild(s);
+}
+
+function scatter(points) {
+  const host = $("scatter");
+  host.innerHTML = "";
+  if (!points.length) return empty(host, "No fetch has returned bytes yet.");
+  const w = 320, h = 140, pad = 26;
+  const maxX = Math.max(...points.map(p => p.bytes), 1);
+  const maxY = Math.max(...points.map(p => p.duration_ms), 0.1);
+  const s = svg(w, h);
+  s.appendChild(node("line", { x1: pad, y1: h - 20, x2: w, y2: h - 20, class: "axis" }));
+  s.appendChild(node("line", { x1: pad, y1: 4, x2: pad, y2: h - 20, class: "axis" }));
+  points.forEach(p => {
+    const cx = pad + (p.bytes / maxX) * (w - pad - 10);
+    const cy = (h - 20) - (p.duration_ms / maxY) * (h - 30);
+    /* >= 8px markers, with a surface ring so overlapping points stay countable. */
+    const dot = node("circle", { cx, cy, r: 4.5, fill: "var(--cat-1)",
+      stroke: "var(--panel)", "stroke-width": 2 });
+    hover(dot, `${p.key} — ${bytes(p.bytes)} in ${p.duration_ms} ms`);
+    s.appendChild(dot);
+  });
+  s.appendChild(node("text", { x: pad, y: h - 6, class: "lab" }, "0"));
+  s.appendChild(node("text", { x: w, y: h - 6, class: "lab", "text-anchor": "end" }, bytes(maxX)));
+  s.appendChild(node("text", { x: 0, y: 10, class: "lab" }, maxY + "ms"));
+  host.appendChild(s);
+}
+
+/* --- wiring ------------------------------------------------------------------ */
+function render(d) {
+  DATA = d;
+  kpis(d.kpi); misses(d.misses); hbars($("served"), d.served, {
+    label: r => r.key, value: r => r.count,
+    caption: r => `${r.key} — ${r.count} fetches, ${bytes(r.bytes)}, last ${ago(r.last)}`,
+  });
+  funnel(d.funnel); activity(d.activity); offered(d.offered);
+  versions(d.versions); latency(d.latency); scatter(d.size_vs_time);
+
+  const sel = $("domain"), current = sel.value;
+  sel.innerHTML = `<option value="">All domains</option>` +
+    d.domains.map(x => `<option${x === current ? " selected" : ""}>${esc(x)}</option>`).join("");
+  const c = d.catalog;
+  $("meta").textContent =
+    `${nf(d.record_count)} records` +
+    (c ? ` · catalog holds ${c.artifact_count} artifacts in ${c.domain_count} domain(s), ${bytes(c.bytes)}` : "") +
+    ` · updated ${new Date().toLocaleTimeString()}`;
+}
+
+async function load() {
+  const hours = +$("range").value, domain = $("domain").value;
+  const q = new URLSearchParams();
+  if (hours) q.set("hours", hours);
+  if (domain) q.set("domain", domain);
+  try {
+    render(await (await fetch("/data?" + q)).json());
+  } catch (e) {
+    $("meta").textContent = "Could not read the log: " + e.message;
+  }
+}
+
+$("range").onchange = load;
+$("domain").onchange = load;
+$("pause").onclick = e => {
+  live = !live;
+  e.target.textContent = live ? "Live" : "Paused";
+  e.target.setAttribute("aria-pressed", String(!live));
+};
+setInterval(() => { if (live) load(); }, 3000);
+load();
+</script>

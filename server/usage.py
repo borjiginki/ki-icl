@@ -6,21 +6,30 @@ is missing from it, and nothing else in the system carries that signal.
 
 **No tool is aware of this.** It is FastMCP middleware, so adding a tool needs no
 logging code and no allowlist entry, and logging cannot fall out of step with the
-tool list. Nothing here may raise into a call: a logging bug stays an annoyance.
+tool list. Logging must never break a call: every emit path swallows its own errors.
+The one thing it must not swallow is the *call's* exception, which is re-raised.
 
-**No caller identity is recorded.** The POC logs what was looked up, never who
-looked it up, so no personal data is processed. If that ever changes, port
-ki-mcp's `utils/observability._caller()` rather than writing a second one: it emits
-a keyed digest gated on a configured salt, and never an email or a raw object id.
+**No caller identity is recorded.** The log says what was looked up, never who looked
+it up, so no personal data is processed. `session` is a per-connection random UUID
+that is not stable across sessions and cannot be linked to a person; it groups one
+conversation without identifying anybody. If real identity is ever wanted, port
+ki-mcp's `utils/observability._caller()` rather than writing a second one: it emits a
+keyed digest gated on a configured salt, and never an email or a raw object id.
 
-One deliberate departure from ki-mcp's middleware, which never parses a tool's
-return value: `records_from_call` does. Hit versus miss is the whole signal and it
-exists only in the payload. The coupling is confined to that one function, and it
-lives here beside the tools rather than in a general-purpose logging module.
+**The question text is deliberately not recorded.** It would be the most useful field
+here and it is the one to refuse: free text from a colleague can carry material
+covered by an NDA or AVV, and personal data with no Art. 6 basis, and once on disk it
+is a store somebody has to own, retain and delete. The requested `id` is a usable
+proxy for intent without any of that.
+
+One deliberate departure from ki-mcp's middleware, which never parses a tool's return
+value: `records_from_call` does. Hit versus miss is the whole signal and it exists
+only in the payload. The coupling is confined to that one function.
 """
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import sys
@@ -53,12 +62,16 @@ def records_from_call(tool: str, arguments: dict, payload: dict) -> list[dict[st
         return [{**base, "domain": domain, "outcome": "not_found"}]
 
     if tool == "get_domain_manifest":
+        offered = [a.get("id") for a in payload.get("artifacts", [])]
+        # `offered` against what was then fetched is the only feedback loop on
+        # description quality, and descriptions are what discovery rests on.
         return [
             {
                 **base,
                 "domain": domain,
                 "outcome": "found",
-                "artifact_count": len(payload.get("artifacts", [])),
+                "artifact_count": len(offered),
+                "offered": offered,
             }
         ]
 
@@ -68,8 +81,39 @@ def records_from_call(tool: str, arguments: dict, payload: dict) -> list[dict[st
         if entry.get("status") == "found":
             record["version_id"] = entry.get("version_id")
             record["file_count"] = entry.get("file_count")
+            # Bytes, not file count: bytes is what fills a context window, and it is
+            # the measure that decides whether an artifact is too big.
+            record["bytes"] = sum(f.get("size", 0) for f in entry.get("files", []))
+            record["skipped"] = len(entry.get("skipped_files", []))
         records.append(record)
     return records
+
+
+def catalog_record(root: Path) -> dict[str, Any]:
+    """One snapshot of what exists, emitted at startup.
+
+    Without it the dashboard cannot tell a miss for something that never existed from
+    a miss for something that was deleted, and cannot show the corpus growing.
+    """
+    domains = root / "domains"
+    artifacts: dict[str, str] = {}
+    total = 0
+    if domains.is_dir():
+        for domain_dir in sorted(d for d in domains.iterdir() if d.is_dir()):
+            try:
+                manifest = json.loads((domain_dir / "_manifest.json").read_text("utf-8"))
+            except (OSError, ValueError):
+                continue
+            for row in manifest.get("artifacts", []):
+                artifacts[f"{domain_dir.name}/{row['id']}"] = row.get("version_id")
+        total = sum(f.stat().st_size for f in domains.rglob("*") if f.is_file())
+    return {
+        "event": "catalog",
+        "domain_count": len({key.split("/")[0] for key in artifacts}),
+        "artifact_count": len(artifacts),
+        "bytes": total,
+        "artifacts": artifacts,
+    }
 
 
 class UsageLog:
@@ -81,12 +125,14 @@ class UsageLog:
 
     def write(self, record: dict[str, Any]) -> None:
         try:
-            line = json.dumps({"ts": _now(), **record})
+            line = json.dumps({"ts": record.pop("ts", None) or _now(), **record})
         except (TypeError, ValueError):
             return  # an unserialisable record is dropped, not raised
         try:
             if self.path is not None:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
+                # Opened per record in append mode: several server processes share one
+                # log (stdio spawns one per client), and O_APPEND keeps short lines whole.
                 with self.path.open("a", encoding="utf-8") as handle:
                     handle.write(line + "\n")
             if self.stream is not None:
@@ -96,10 +142,51 @@ class UsageLog:
 
 
 def _now() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z"
+    """UTC to the millisecond. Second resolution collapsed a whole batch onto one instant."""
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
 USAGE_LOG = UsageLog(path=Path(USAGE_LOG_PATH) if USAGE_LOG_PATH else None)
+
+
+def _attr(obj: Any, name: str) -> Any:
+    """Read `obj.name`, or None if it is absent *or raises*.
+
+    `Context.session_id` is a property that raises RuntimeError outside a request
+    context, which a plain getattr default does not catch. Without this guard one
+    raising property silently kills logging for the whole call.
+    """
+    try:
+        return getattr(obj, name, None)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _correlation(context: MiddlewareContext) -> dict[str, Any]:
+    """`session` groups one client connection, `seq` orders calls within it.
+
+    Both come from FastMCP and neither identifies a person: session_id is a random
+    UUID minted per connection and never reused. Both are absent when a tool is
+    called outside a request context, and the record is still written without them.
+    """
+    fields: dict[str, Any] = {}
+    ctx = _attr(context, "fastmcp_context")
+
+    session = _attr(ctx, "session_id")
+    if isinstance(session, str) and session:
+        fields["session"] = session[:8]
+
+    request_id = _attr(ctx, "request_id")
+    if request_id is not None:
+        try:
+            fields["seq"] = int(request_id)
+        except (TypeError, ValueError):
+            fields["seq"] = str(request_id)
+
+    stamp = _attr(context, "timestamp")
+    if isinstance(stamp, datetime.datetime):
+        fields["ts"] = stamp.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    return fields
 
 
 class ContextUsageMiddleware(Middleware):
@@ -107,15 +194,42 @@ class ContextUsageMiddleware(Middleware):
 
     async def on_call_tool(self, context: MiddlewareContext, call_next) -> Any:
         started = time.perf_counter()
-        result = await call_next(context)
+        name = getattr(context.message, "name", "") or ""
         try:
-            name = getattr(context.message, "name", "") or ""
+            result = await call_next(context)
+        except Exception as exc:
+            # The call's exception is re-raised. Only the logging of it is swallowed.
+            self._emit_error(context, name, exc, started)
+            raise
+
+        try:
             if name in CONTEXT_TOOLS:
                 arguments = getattr(context.message, "arguments", None) or {}
                 payload = json.loads(result.content[0].text)
-                duration_ms = round((time.perf_counter() - started) * 1000, 1)
+                shared = {**_correlation(context), "duration_ms": _elapsed(started)}
                 for record in records_from_call(name, arguments, payload):
-                    USAGE_LOG.write({**record, "duration_ms": duration_ms})
+                    USAGE_LOG.write({**shared, **record})
         except Exception:  # noqa: BLE001 — logging must never break a call
             pass
         return result
+
+    def _emit_error(self, context, name: str, exc: Exception, started: float) -> None:
+        try:
+            if name not in CONTEXT_TOOLS:
+                return
+            USAGE_LOG.write(
+                {
+                    **_correlation(context),
+                    "event": "context_use",
+                    "tool": name,
+                    "outcome": "error",
+                    "error": f"{type(exc).__name__}: {exc}"[:300],
+                    "duration_ms": _elapsed(started),
+                }
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _elapsed(started: float) -> float:
+    return round((time.perf_counter() - started) * 1000, 1)
