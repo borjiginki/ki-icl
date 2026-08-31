@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.validate_context import validate  # noqa: E402
+from tests.conftest import write_artifact  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -63,6 +64,63 @@ def test_a_domain_outside_the_agreed_partition_is_rejected(source_tree: Path):
     errors = validate(source_tree)
 
     assert any("operations" in e and "KNOWN_DOMAINS" in e for e in errors), errors
+
+
+def _project(source_tree: Path, artifact_id: str, **files: str) -> Path:
+    """A projects-domain artifact, valid unless a caller leaves something out."""
+    projects = source_tree / "domains" / "projects"
+    projects.mkdir(exist_ok=True)
+    (projects / "domain.yaml").write_text(
+        "id: projects\ndescription: What we are working on.\n", encoding="utf-8"
+    )
+    write_artifact(
+        projects,
+        artifact_id,
+        artifact__yaml="title: P\nkind: project\ndescription: A project.\n",
+        README__md="# P\n",
+        **files,
+    )
+    return projects / artifact_id
+
+
+def test_a_project_without_the_required_files_is_rejected(source_tree: Path):
+    """Uniform layout is what lets one question be answered from one file."""
+    _project(source_tree, "dhl-cbs", status__md="# S\n\n**As of 2026-08-28.**\n")
+
+    errors = validate(source_tree)
+
+    assert any("team.md" in e for e in errors), errors
+    assert not any("status.md" in e for e in errors), errors
+
+
+def test_a_project_status_without_an_as_of_date_is_rejected(source_tree: Path):
+    """version_id is opaque, so only the content can carry recency."""
+    _project(
+        source_tree,
+        "dhl-cbs",
+        status__md="# S\n\nStage: delivery.\n",
+        team__md="# T\n\n**As of 2026-08-28.**\n",
+    )
+
+    errors = validate(source_tree)
+
+    assert any("status.md" in e and "As of" in e for e in errors), errors
+
+
+def test_a_fully_formed_project_passes(source_tree: Path):
+    _project(
+        source_tree,
+        "dhl-cbs",
+        status__md="# S\n\n**As of 2026-08-28.**\nStage: delivery.\n",
+        team__md="# T\n\n**As of 2026-08-28.**\n",
+    )
+
+    assert validate(source_tree) == []
+
+
+def test_required_files_apply_only_to_the_domains_that_declare_them(source_tree: Path):
+    """company/ has no declared shape, so its artifacts need no status.md."""
+    assert "status.md" not in " ".join(validate(source_tree))
 
 
 def test_an_artifact_folder_name_that_is_not_kebab_case_is_rejected(source_tree: Path):

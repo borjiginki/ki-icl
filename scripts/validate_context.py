@@ -23,20 +23,35 @@ MAX_FILE_BYTES = 1_048_576
 
 # The partition is a decision, not a convention: issue #20 OQ-13, settled 2026-08-31
 # on the value-chain-plus-support-function model, with `company` added for facts that
-# belong to no single function. A new domain changes how the whole corpus is organised
-# and every telemetry key written against it, so it belongs in a pull request that says
-# so rather than in a mkdir.
+# belong to no single function and `projects` for per-engagement state. A new domain
+# changes how the whole corpus is organised and every telemetry key written against it,
+# so it belongs in a pull request that says so rather than in a mkdir.
 KNOWN_DOMAINS = {
     "company",
     "finance",
     "hr",
     "marketing",
+    "projects",
     "sales",
     "value-creation",
     "value-delivery",
 }
+
+# A domain whose artifacts all answer the same questions is only usable if they answer
+# them in the same place. A project whose stage is buried in README.md prose cannot
+# answer "what stage is it at", and an agent cannot learn one layout per project.
+# Kept as data rather than a per-domain branch so the next domain that needs a shape is
+# a dictionary entry. See domains/value-creation/project-status-reporting/.
+REQUIRED_ARTIFACT_FILES: dict[str, tuple[str, ...]] = {
+    "projects": ("status.md", "team.md"),
+}
 ID_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 REQUIRED_ARTIFACT_FIELDS = ("title", "kind", "description")
+
+# `status.md` is only trustworthy if it says when it was written. `version_id` cannot
+# carry that: it is opaque by design, compared for equality and never parsed, so a
+# three-month-old status would otherwise answer with no way to know.
+AS_OF_PATTERN = re.compile(r"\*\*As of (\d{4}-\d{2}-\d{2})", re.IGNORECASE)
 
 
 def _load_yaml(path: Path, errors: list[str]) -> dict | None:
@@ -84,7 +99,7 @@ def validate(root: Path) -> list[str]:
 def _validate_domain(domain_dir: Path, errors: list[str]) -> None:
     if domain_dir.name not in KNOWN_DOMAINS:
         errors.append(
-            f"{domain_dir.name}/: not one of the seven agreed domains "
+            f"{domain_dir.name}/: not one of the agreed domains "
             f"({', '.join(sorted(KNOWN_DOMAINS))}). The partition is a decision, so "
             f"adding a domain means amending KNOWN_DOMAINS in this file and saying why "
             f"in the pull request. If this folder is meant to be an artifact, it belongs "
@@ -126,6 +141,21 @@ def _validate_artifact(artifact_dir: Path, seen: set[str], errors: list[str]) ->
 
     if not (artifact_dir / "README.md").is_file():
         errors.append(f"{label}/: missing README.md (the entry document is required)")
+
+    for name in REQUIRED_ARTIFACT_FILES.get(artifact_dir.parent.name, ()):
+        path = artifact_dir / name
+        if not path.is_file():
+            errors.append(
+                f"{label}/: missing {name}, which every artifact in "
+                f"`{artifact_dir.parent.name}/` must have so the same question is "
+                f"answered from the same place in every one"
+            )
+        elif not AS_OF_PATTERN.search(path.read_text(encoding="utf-8")):
+            errors.append(
+                f"{label}/{name}: no `**As of YYYY-MM-DD**` line. Without it a stale "
+                f"file answers confidently, because `version_id` is opaque and cannot "
+                f"carry recency."
+            )
 
 
 def main() -> int:

@@ -19,13 +19,14 @@ There is no similarity path, no closest match, and no fuzzy-matching code anywhe
 
 ## Domains
 
-Seven, and the list is a decision rather than a convention.
+Eight, and the list is a decision rather than a convention.
 The six business functions come from the project lead's model.
-`company` is an addition, for facts that belong to no single function.
+`company` and `projects` are additions, and each is justified below the table.
 
 | Domain | The function | Look here for |
 |---|---|---|
 | `company` | (addition) | Who KI group is: what it does, how it positions itself, the certifications and regulatory commitments it operates under |
+| `projects` | (addition) | What we are working on right now, one artifact per engagement: goal, scope, stage, health, team, decisions, dates |
 | `value-creation` | Value Creation | Engineering work: methodologies, technical standards, review practices |
 | `value-delivery` | Value Delivery | After-sales communication to the customer: handover, status reporting, escalation |
 | `marketing` | Marketing | Creating awareness: positioning, messaging, content, events, campaigns |
@@ -33,7 +34,14 @@ The six business functions come from the project lead's model.
 | `finance` | Finance | Budgets, invoicing, cost and expense rules, approval thresholds, reporting |
 | `hr` | HR | People and legal: employment, personnel processes, and the contracts around them |
 
-Five of the seven hold no artifacts yet, and that is the intended state rather than an unfinished one.
+`company` exists because identity facts belong to no single function, and the old catch-all `hr` description was evidence somebody already needed that home.
+
+`projects` is the one domain that is **not** a business function, and it is worth being explicit about why.
+Every other domain holds facts that are stable and reusable: how we run a discovery workshop, what we reimburse.
+A project is the opposite, per-instance state that changes weekly, and the routing rule below does not separate the two because engineering owns both.
+The justification is volatility and cardinality rather than function: putting weekly-changing project state beside the methodology that should be stable would make one domain do two jobs, and projects accumulate without bound while functions do not.
+
+Five of the eight hold no artifacts yet, and that is the intended state rather than an unfinished one.
 An empty domain answers `get_domain_manifest` with an honest empty list, and it gives `report_gap` somewhere correct to put the demand.
 That tool asks an agent to pick a domain "from `list_domains`", so a marketing question with no `marketing` domain to name would land under a mislabelled one or vanish entirely.
 
@@ -49,12 +57,44 @@ Routing by owner is the only rule that agrees with the axis ownership will land 
 Audiences overlap and drift anyway.
 Retrieval from the other side is unaffected, because the artifact's own `description` carries the "when to use" triggers wherever the artifact sits.
 
-Both artifacts in the repo are worked examples, and both land against what the audience rule would have said:
+Two artifacts in the repo are worked examples, and both land against what the audience rule would have said:
 
 | Artifact | Domain, and why | The audience rule would have said |
 |---|---|---|
 | `expense-policy` | `finance`, which sets the thresholds and the evidence rules | `hr`, since an employee is the one asking |
 | `discovery-workshop` | `value-creation`, which owns the methodology | `sales`, since its own description says "when preparing, scoping, or quoting" |
+
+The rule also decides where the project reporting convention lives.
+`project-status-reporting` is in `value-creation`, not `projects`, because engineering authors and maintains it, and because `projects` holds engagements rather than documents about engagements.
+
+### The `projects` domain
+
+One folder per engagement, named as the business names it, so `list_domains` then `get_domain_manifest("projects")` is enough to find the one being asked about.
+Every project uses the same file layout, and that uniformity is the point: it is what lets a question be answered from the right file without anyone having learned that project's particular habits.
+
+| File | Answers | Required |
+|---|---|---|
+| `README.md` | What are we doing, what is in and out of scope | yes |
+| `status.md` | What stage, what health, what moved, what is blocked | yes |
+| `team.md` | Who is working on it, and who decides what on the customer side | yes |
+| `decisions.md` | What was decided and why, and what it cost | when there is one |
+| `timeline.md` | What is due when, and what has slipped | when dates are committed |
+
+`REQUIRED_ARTIFACT_FILES` in [scripts/validate_context.py](scripts/validate_context.py) enforces the required three, as data rather than a per-domain branch so the next domain needing a shape is a dictionary entry.
+`decisions.md` and `timeline.md` are deliberately not required: a project in discovery has settled no arguments and committed to no dates, and empty files would be worse than absent ones.
+
+**Every status, team and timeline file must carry an `**As of YYYY-MM-DD**` line, and the validator fails without it.**
+This is the one rule in the domain that is about correctness rather than tidiness.
+`version_id` is opaque by design, compared for equality and never parsed, so it cannot tell an agent that a status is three months old.
+Without a date in the content a stale status answers confidently and nobody can tell, which is precisely the wrong answer this repo exists to make impossible.
+An agent answering from this domain is expected to say the date: not "the project is at risk" but "as of 28 August it was at risk".
+
+Note the fetch granularity.
+`get_artifact` returns every file in the folder in one call, so the file split serves human editing and precise quoting, not fetch size.
+A project folder with six files returns all six every time, which is the reason to keep each one tight.
+
+The conventions, the stage and health vocabularies, and what an update is meant to cost are in [project-status-reporting](domains/value-creation/project-status-reporting/README.md).
+Two things there are unresolved and matter before real project data lands: read access is broad by construction, so customer names and slipped commitments would be readable by anyone reaching the server, and nothing yet fails when a status goes stale.
 
 Domain ids are close to permanent.
 `version_id` comes from the last commit touching `domains/<domain>/<artifact>/`, so renaming a domain restamps every artifact inside it at once.
@@ -64,7 +104,7 @@ Usage records are keyed on domain plus id, so a rename also splits an artifact's
 
 ```bash
 make install     # .venv + dependencies
-make test        # 146 tests
+make test        # 150 tests
 make demo        # walk the acceptance demo end to end
 make serve-http  # MCP server on http://127.0.0.1:8000/mcp
 make inspector   # serve, and open MCP Inspector against it
