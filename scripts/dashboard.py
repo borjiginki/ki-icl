@@ -308,8 +308,12 @@ def _misses(
                     "marked_at_count": entry["count"],
                 }
             )
-        else:
+        elif entry["state"] != "deleted":
             curated.append({**row, "state": entry["state"], "marked_at": entry["at"]})
+        # `deleted` falls through to neither list: it means gone, and leaving it in
+        # the handled list would just be a slower dismiss. The confirmation is what
+        # makes that safe to mean literally. The mark stays in the curation file, so
+        # it is still recoverable by editing that document.
     return visible, curated
 
 

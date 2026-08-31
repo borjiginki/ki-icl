@@ -98,7 +98,7 @@ They differ only in what happens when more demand arrives afterwards, which is t
 |---|---|---|
 | **resolved** | written up | comes back, flagged in red. The document exists and people are still missing it, so it is not reachable and something is broken |
 | **dismiss** | not now | comes back. A dismissal judges the demand so far, and more demand is new information |
-| **delete** | never | stays gone. Asks for confirmation, and is still restorable from the handled list |
+| **delete** | never | disappears from the panel for good. Asks for confirmation; the mark stays in `logs/curation.json`, so it is recoverable by editing that file but not from the UI |
 
 Each decision records the demand it was made at, which is what makes it revisitable rather than a permanent mute.
 Re-marking raises the baseline, so "seen it, still not writing it" holds until the next time somebody asks.

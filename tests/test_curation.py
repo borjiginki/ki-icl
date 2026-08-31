@@ -163,6 +163,18 @@ def test_a_row_says_whether_the_artifact_now_exists(records, tmp_path: Path):
 # --- deleted ----------------------------------------------------------------
 
 
+def test_a_deleted_row_disappears_from_the_panel_entirely(records, tmp_path: Path):
+    """Deleted means gone. Leaving it in the handled list is just a slower dismiss,
+    and the confirmation is what makes that safe to mean literally."""
+    curation = tmp_path / "c.json"
+    curate(curation, "hr/office-plants", "deleted", count=1)
+
+    result = state_of(records, curation)
+
+    assert "hr/office-plants" not in {r["key"] for r in result["misses"]}
+    assert "hr/office-plants" not in {r["key"] for r in result["curated"]}
+
+
 def test_a_deleted_row_never_returns_however_much_demand_arrives(records, tmp_path: Path):
     curation = tmp_path / "c.json"
     curate(curation, "hr/office-plants", "deleted", count=1)
@@ -173,11 +185,24 @@ def test_a_deleted_row_never_returns_however_much_demand_arrives(records, tmp_pa
     result = state_of(records, curation)
 
     assert "hr/office-plants" not in {r["key"] for r in result["misses"]}
-    assert result["curated"][0]["state"] == "deleted"
+    assert "hr/office-plants" not in {r["key"] for r in result["curated"]}
 
 
-def test_a_deleted_row_is_still_restorable(records, tmp_path: Path):
-    """Confirmation guards the click; restore guards the regret."""
+def test_dismissed_and_resolved_still_appear_in_the_handled_list(records, tmp_path: Path):
+    """Only `deleted` vanishes. The other two are decisions you can revisit."""
+    curation = tmp_path / "c.json"
+    curate(curation, "hr/office-plants", "dismissed", count=1)
+    curate(curation, "hr/onboarding", "resolved", count=1)
+    curate(curation, "hr/parental-leave", "deleted", count=2)
+
+    handled = {r["key"]: r["state"] for r in state_of(records, curation)["curated"]}
+
+    assert handled == {"hr/office-plants": "dismissed", "hr/onboarding": "resolved"}
+
+
+def test_a_deleted_row_is_recoverable_by_clearing_the_mark(records, tmp_path: Path):
+    """No longer reachable from the UI by design, but the curation file is a plain
+    document somebody can edit when they regret it."""
     curation = tmp_path / "c.json"
     curate(curation, "hr/office-plants", "deleted", count=1)
     curate(curation, "hr/office-plants", "active")

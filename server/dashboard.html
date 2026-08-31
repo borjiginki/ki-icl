@@ -135,7 +135,7 @@
        found no answer and said so; <b>guessed</b> means it asked for an id that does not exist.
        <b>resolved</b> once written, <b>dismiss</b> for not now, <b>delete</b> for never.
        Dismissed and resolved rows come back if demand grows; a resolved one coming back means the
-       artifact exists but is not reachable. Deleted rows stay gone.</p>
+       artifact exists but is not reachable. Deleted rows are gone for good.</p>
     <div id="misses"></div>
   </section>
 
@@ -193,8 +193,8 @@
     <div class="dlg-body">
       <h3>Delete this suggestion?</h3>
       <code class="dlg-key" id="dlgKey"></code>
-      <p>It stays hidden however many times it is asked for again, so you will not hear
-         about this one twice. You can still restore it from the handled list.</p>
+      <p>It disappears from this panel for good, however many times it is asked for
+         again. There is no undo here.</p>
       <p>If you only mean <b>not now</b>, dismiss it instead: a dismissed suggestion
          comes back on its own once demand grows.</p>
     </div>
@@ -316,7 +316,7 @@ function missRow(r, max, curated) {
     ? button("active", "&#8617; restore", "Put it back on the list")
     : button("resolved", "&#10003; resolved", "Written up. Returns if it is still being missed.") +
       button("dismissed", "&#8211; not now", "Returns if demand grows.") +
-      button("deleted", "&#215; delete", "Never show again. Asks first.", true)
+      button("deleted", "&#215; delete", "Remove for good. Asks first; no undo.", true)
   }</div>`;
   return `<tr>
     <td class="id">${esc(r.key)}
@@ -349,7 +349,7 @@ function misses(rows, curatedRows) {
     (curatedRows.length ? `
       <details id="dismissedBox" style="margin-top:12px"${dismissedOpen ? " open" : ""}>
         <summary style="cursor:pointer;font-size:12px;color:var(--ink-3)">
-          Handled (${curatedRows.length}) &mdash; dismissed and resolved come back if demand grows; deleted does not
+          Handled (${curatedRows.length}) &mdash; these come back on their own if demand grows
         </summary>
         <div class="scroll" style="margin-top:8px;opacity:.72"><table>
           ${curatedRows.map(r => missRow(r, max, true)).join("")}
