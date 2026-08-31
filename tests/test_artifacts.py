@@ -6,6 +6,7 @@ path-traversal tests exist so review never has to re-argue them.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -56,6 +57,26 @@ def test_manifest_has_one_row_per_artifact_and_no_file_bodies(artifacts):
         assert row["version_id"]
         assert "files" not in row
     assert "fetch_hint" in payload
+
+
+def test_an_empty_domain_is_served_honestly_and_points_at_report_gap(artifacts, catalog):
+    """Five of the seven real domains hold nothing yet, so this is a normal answer.
+
+    Telling an agent to `get_artifact` from an empty domain is a dead end; the gap is
+    the only useful thing it can do, and the only way the domain learns it is wanted.
+    """
+    empty = catalog / "domains" / "marketing"
+    empty.mkdir()
+    (empty / "_manifest.json").write_text(
+        json.dumps({"domain": "marketing", "description": "Awareness.", "artifacts": []}),
+        encoding="utf-8",
+    )
+
+    payload = artifacts.domain_manifest_payload("marketing")
+
+    assert payload["artifacts"] == []
+    assert "report_gap" in payload["fetch_hint"]
+    assert "get_artifact" not in payload["fetch_hint"]
 
 
 def test_unknown_domain_manifest_is_not_found_and_names_the_real_domains(artifacts):

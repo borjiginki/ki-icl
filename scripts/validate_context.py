@@ -20,6 +20,21 @@ ROOT = Path(__file__).resolve().parent.parent
 # them are 15.32 MB. Widening this is a deliberate decision, not a convenience.
 ALLOWED_SUFFIXES = {".md", ".yaml", ".yml", ".json", ".txt", ".csv"}
 MAX_FILE_BYTES = 1_048_576
+
+# The partition is a decision, not a convention: issue #20 OQ-13, settled 2026-08-31
+# on the value-chain-plus-support-function model, with `company` added for facts that
+# belong to no single function. A new domain changes how the whole corpus is organised
+# and every telemetry key written against it, so it belongs in a pull request that says
+# so rather than in a mkdir.
+KNOWN_DOMAINS = {
+    "company",
+    "finance",
+    "hr",
+    "marketing",
+    "sales",
+    "value-creation",
+    "value-delivery",
+}
 ID_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 REQUIRED_ARTIFACT_FIELDS = ("title", "kind", "description")
 
@@ -67,6 +82,15 @@ def validate(root: Path) -> list[str]:
 
 
 def _validate_domain(domain_dir: Path, errors: list[str]) -> None:
+    if domain_dir.name not in KNOWN_DOMAINS:
+        errors.append(
+            f"{domain_dir.name}/: not one of the seven agreed domains "
+            f"({', '.join(sorted(KNOWN_DOMAINS))}). The partition is a decision, so "
+            f"adding a domain means amending KNOWN_DOMAINS in this file and saying why "
+            f"in the pull request. If this folder is meant to be an artifact, it belongs "
+            f"one level down, inside the domain that will own it."
+        )
+
     domain_yaml = domain_dir / "domain.yaml"
     if not domain_yaml.is_file():
         errors.append(f"{domain_dir.name}/: missing domain.yaml")

@@ -17,11 +17,54 @@ The property that matters is that a wrong answer is impossible.
 A lookup is an exact dictionary hit or an honest `not_found`.
 There is no similarity path, no closest match, and no fuzzy-matching code anywhere to be reached.
 
+## Domains
+
+Seven, and the list is a decision rather than a convention.
+The six business functions come from the project lead's model.
+`company` is an addition, for facts that belong to no single function.
+
+| Domain | The function | Look here for |
+|---|---|---|
+| `company` | (addition) | Who KI group is: what it does, how it positions itself, the certifications and regulatory commitments it operates under |
+| `value-creation` | Value Creation | Engineering work: methodologies, technical standards, review practices |
+| `value-delivery` | Value Delivery | After-sales communication to the customer: handover, status reporting, escalation |
+| `marketing` | Marketing | Creating awareness: positioning, messaging, content, events, campaigns |
+| `sales` | Sales | Offers, estimation and man day rates, pricing, contract shape |
+| `finance` | Finance | Budgets, invoicing, cost and expense rules, approval thresholds, reporting |
+| `hr` | HR | People and legal: employment, personnel processes, and the contracts around them |
+
+Five of the seven hold no artifacts yet, and that is the intended state rather than an unfinished one.
+An empty domain answers `get_domain_manifest` with an honest empty list, and it gives `report_gap` somewhere correct to put the demand.
+That tool asks an agent to pick a domain "from `list_domains`", so a marketing question with no `marketing` domain to name would land under a mislabelled one or vanish entirely.
+
+`KNOWN_DOMAINS` in [scripts/validate_context.py](scripts/validate_context.py) is the gate.
+Adding a domain means amending that constant and saying why in the pull request, because a new domain changes how the whole corpus is organised and every telemetry key written against it.
+
+### Which domain does an artifact go in
+
+**The one whose team authors and maintains it, not the one whose people are most likely to ask.**
+
+Routing by owner is the only rule that agrees with the axis ownership will land on.
+`owner` is already reserved at both levels and served as `null`, so `CODEOWNERS` and approval routing will key off exactly this, and routing by audience would put the two in permanent disagreement.
+Audiences overlap and drift anyway.
+Retrieval from the other side is unaffected, because the artifact's own `description` carries the "when to use" triggers wherever the artifact sits.
+
+Both artifacts in the repo are worked examples, and both land against what the audience rule would have said:
+
+| Artifact | Domain, and why | The audience rule would have said |
+|---|---|---|
+| `expense-policy` | `finance`, which sets the thresholds and the evidence rules | `hr`, since an employee is the one asking |
+| `discovery-workshop` | `value-creation`, which owns the methodology | `sales`, since its own description says "when preparing, scoping, or quoting" |
+
+Domain ids are close to permanent.
+`version_id` comes from the last commit touching `domains/<domain>/<artifact>/`, so renaming a domain restamps every artifact inside it at once.
+Usage records are keyed on domain plus id, so a rename also splits an artifact's history into two unrelated series.
+
 ## Quick start
 
 ```bash
 make install     # .venv + dependencies
-make test        # 39 tests
+make test        # 146 tests
 make demo        # walk the acceptance demo end to end
 make serve-http  # MCP server on http://127.0.0.1:8000/mcp
 make inspector   # serve, and open MCP Inspector against it
@@ -54,7 +97,7 @@ server/mcp_server.py                throwaway harness. Replaced by ki-mcp's tool
 
 ## Adding an artifact
 
-1. `mkdir domains/company/<kebab-case-id>/`
+1. Pick the domain whose team will own the document, per the routing rule above, then `mkdir domains/<domain>/<kebab-case-id>/`.
 2. Write `artifact.yaml` with `title`, `kind` and `description`.
    The `description` is what an agent reads to decide whether to fetch, so write it as a "when to use" signal, not a label.
 3. Write `README.md`. Supporting files may nest freely, and must be text.
@@ -129,7 +172,7 @@ Every context lookup is recorded, one line per artifact actually looked up:
 
 ```json
 {"ts":"2026-08-28T09:04:11Z","event":"context_use","tool":"get_artifact",
- "domain":"hr","id":"expense-policy","outcome":"found",
+ "domain":"finance","id":"expense-policy","outcome":"found",
  "version_id":"b0f9dd0a...","file_count":2,"duration_ms":0.7}
 {"ts":"2026-08-28T09:04:11Z","event":"context_use","tool":"get_artifact",
  "domain":"hr","id":"parental-leave","outcome":"not_found","duration_ms":0.4}
@@ -206,7 +249,8 @@ Everything here is deliberate, and each item is cheap to add once it is wanted.
 | Azure blob fetch, ETag guard, cache swap | Parametrizing `ki-mcp/server/utils/skills_source.py`, which already works in production. Nothing new to design. |
 | `publish-context.yml` (upload + `/refresh`) | Blocked on a federated credential for this repo on the publisher Entra app. Copy `ki-dev-skills/.github/workflows/publish-skills.yml` and change four things. |
 | Registration in ki-mcp | Move `server/artifacts.py` to `ki-mcp/server/utils/artifacts.py` and the three tool functions to `server/tools/artifact_tools.py`. |
-| Ownership, `CODEOWNERS`, approval routing | Deferred by decision. `owner` is already served as `null` at both levels, so adding it is data, not a schema change. |
+| Ownership, `CODEOWNERS`, approval routing | Deferred by decision. `owner` is already served as `null` at both levels, so adding it is data, not a schema change. The routing rule above is chosen to agree with it when it lands. |
+| A fixed `kind` vocabulary | Issue #20 OQ-3, undecided. `kind` is a non-empty free string, and two values are in use: `guideline` and `methodology`. Seven domains will pull it in more directions, so it is worth settling soon, but generalising before there is content to generalise from would be the wrong order. |
 | Search, similarity, resolution from task context | Deferred on a stated trigger. Adding it would break the property in the first section. |
 | Aggregating usage beyond a local file | `logs/usage.jsonl` is POC scaffolding. In ki-mcp the records go to stderr and Log Analytics collects them, so the file sink is deleted, not ported. |
 | Binary assets | See the text-only rule above. |

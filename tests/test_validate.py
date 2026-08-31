@@ -16,7 +16,7 @@ def test_a_well_formed_tree_passes(source_tree: Path):
     assert validate(source_tree) == []
 
 
-def test_this_repos_own_content_passes(): 
+def test_this_repos_own_content_passes():
     assert validate(REPO_ROOT) == []
 
 
@@ -50,6 +50,19 @@ def test_a_domain_id_that_disagrees_with_its_folder_is_rejected(source_tree: Pat
     )
 
     assert any("kompany" in e for e in validate(source_tree))
+
+
+def test_a_domain_outside_the_agreed_partition_is_rejected(source_tree: Path):
+    """The partition is a decision, so a new domain cannot arrive by mkdir alone."""
+    invented = source_tree / "domains" / "operations"
+    invented.mkdir()
+    (invented / "domain.yaml").write_text(
+        "id: operations\ndescription: Keeping the lights on.\n", encoding="utf-8"
+    )
+
+    errors = validate(source_tree)
+
+    assert any("operations" in e and "KNOWN_DOMAINS" in e for e in errors), errors
 
 
 def test_an_artifact_folder_name_that_is_not_kebab_case_is_rejected(source_tree: Path):

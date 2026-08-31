@@ -123,12 +123,24 @@ def domain_manifest_payload(domain: str) -> dict[str, Any]:
     """One domain's metadata plus one row per artifact. No file bodies."""
     for name, _, manifest in _described_domains():
         if name == domain:
+            rows = manifest.get("artifacts", [])
             return {
                 "domain": name,
                 "description": manifest.get("description", ""),
                 "owner": manifest.get("owner"),
-                "artifacts": manifest.get("artifacts", []),
-                "fetch_hint": f'Fetch with `get_artifact("{name}", ["<id>"])`.',
+                "artifacts": rows,
+                # A domain with nothing in it yet is a normal state, and telling an
+                # agent to fetch from it would be a dead end. The gap is the only
+                # useful thing it can do here, and the only way this domain learns.
+                "fetch_hint": (
+                    f'Fetch with `get_artifact("{name}", ["<id>"])`.'
+                    if rows
+                    else (
+                        f"Nothing is published in `{name}` yet. Tell the user it is not "
+                        f'available, and record the need with `report_gap("{name}", '
+                        f'"<topic>")`. Do not answer from another domain.'
+                    )
+                ),
             }
     return _not_found_domain(domain)
 
