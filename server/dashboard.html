@@ -59,9 +59,45 @@
   .tag { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding: 1px 7px;
          border-radius: 999px; border: 1px solid var(--line); color: var(--ink-2); white-space: nowrap; }
   .empty { color: var(--ink-3); font-size: 13px; padding: 10px 0; }
-  .mini { font-size: 11px; padding: 2px 8px; border-radius: 6px; color: var(--ink-3); }
-  .mini:hover { color: var(--ink); border-color: var(--ink-3); }
-  .mini:disabled { opacity: .4; cursor: default; }
+
+  /* Row actions: recessive until you go near them, so three buttons on every row
+     do not compete with the data. Colour arrives on hover and names the consequence. */
+  .actions { display: inline-flex; gap: 4px; justify-content: flex-end; }
+  .mini {
+    font-size: 11px; line-height: 1.6; padding: 2px 9px; border-radius: 999px;
+    color: var(--ink-3); border-color: transparent; background: transparent;
+    transition: color .12s, border-color .12s, background .12s;
+  }
+  tr:hover .mini { border-color: var(--line); }
+  .mini:hover { color: var(--ink); border-color: var(--ink-3); background: var(--surface); }
+  .mini[data-state="resolved"]:hover { color: var(--good); border-color: var(--good); }
+  .mini[data-state="deleted"]:hover  { color: var(--crit); border-color: var(--crit); }
+  .mini[data-state="active"]:hover   { color: var(--seq);  border-color: var(--seq); }
+  .mini:disabled { opacity: .35; cursor: default; }
+  .mini:focus-visible { outline: 2px solid var(--seq); outline-offset: 1px; }
+
+  dialog {
+    border: 1px solid var(--line); border-radius: 14px; padding: 0; max-width: 30rem;
+    background: var(--panel); color: var(--ink);
+    box-shadow: 0 12px 40px rgba(0,0,0,.18);
+  }
+  dialog::backdrop { background: rgba(0,0,0,.36); }
+  .dlg-body { padding: 20px 22px 0; }
+  .dlg-body h3 { margin: 0 0 8px; font-size: 15px; }
+  .dlg-body p { margin: 0 0 10px; font-size: 13px; color: var(--ink-2); line-height: 1.5; }
+  .dlg-key {
+    display: block; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px; background: var(--surface); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 10px; margin: 0 0 12px; word-break: break-all;
+  }
+  .dlg-foot {
+    display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap;
+    padding: 14px 22px 18px;
+  }
+  .dlg-foot button { font-size: 13px; padding: 6px 14px; }
+  .btn-danger { border-color: var(--crit); color: var(--crit); }
+  .btn-danger:hover { background: var(--crit); color: var(--panel); }
+  .btn-quiet { color: var(--ink-2); }
   .scroll { overflow-x: auto; }
   svg { display: block; overflow: visible; }
   .axis { stroke: var(--line); }
@@ -148,13 +184,35 @@
 
 <div id="tip"></div>
 
+<!-- Deleting is the one decision that does not undo itself, so it asks. The safer
+     alternative is offered as an action rather than described in prose: if someone
+     only meant "not now", making them cancel and hunt for another button is how you
+     get people clicking delete anyway. -->
+<dialog id="confirmDlg">
+  <form method="dialog">
+    <div class="dlg-body">
+      <h3>Delete this suggestion?</h3>
+      <code class="dlg-key" id="dlgKey"></code>
+      <p>It stays hidden however many times it is asked for again, so you will not hear
+         about this one twice. You can still restore it from the handled list.</p>
+      <p>If you only mean <b>not now</b>, dismiss it instead: a dismissed suggestion
+         comes back on its own once demand grows.</p>
+    </div>
+    <div class="dlg-foot">
+      <button value="" class="btn-quiet" autofocus>Cancel</button>
+      <button value="dismissed">Dismiss instead</button>
+      <button value="deleted" class="btn-danger">Delete</button>
+    </div>
+  </form>
+</dialog>
+
 <script>
 const $ = id => document.getElementById(id);
 const tip = $("tip");
 let DATA = null, live = true;
 /* The 3s poll rebuilds the panel, which destroys the <details> element and takes its
    open state with it. Held out here so re-rendering does not shut it in your face. */
-let dismissedOpen = false;
+let dismissedOpen = false, modalOpen = false;
 
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const nf = n => (n ?? 0).toLocaleString();
@@ -251,12 +309,15 @@ function returnedTag(r) {
 }
 
 function missRow(r, max, curated) {
-  const actions = curated
-    ? `<button class="mini" data-state="active" data-key="${esc(r.key)}">restore</button>`
-    : `<button class="mini" data-state="resolved" data-key="${esc(r.key)}">resolved</button>
-       <button class="mini" data-state="dismissed" data-key="${esc(r.key)}">dismiss</button>
-       <button class="mini" data-state="deleted" data-confirm="1"
-               data-key="${esc(r.key)}">delete</button>`;
+  const button = (state, label, title, confirm) =>
+    `<button class="mini" data-state="${state}" data-key="${esc(r.key)}" title="${title}"
+             ${confirm ? 'data-confirm="1"' : ""}>${label}</button>`;
+  const actions = `<div class="actions">${curated
+    ? button("active", "&#8617; restore", "Put it back on the list")
+    : button("resolved", "&#10003; resolved", "Written up. Returns if it is still being missed.") +
+      button("dismissed", "&#8211; not now", "Returns if demand grows.") +
+      button("deleted", "&#215; delete", "Never show again. Asks first.", true)
+  }</div>`;
   return `<tr>
     <td class="id">${esc(r.key)}
       <div style="height:4px;margin-top:4px;border-radius:2px;background:var(--seq);width:${(r.count/max*100).toFixed(0)}%"></div>
@@ -300,19 +361,36 @@ function misses(rows, curatedRows) {
 
   host.querySelectorAll("button[data-state]").forEach(b => {
     b.onclick = async () => {
-      /* Delete is the one that does not come back on its own, so it asks first. */
-      if (b.dataset.confirm && !confirm(
-            `Delete the suggestion "${b.dataset.key}"?\n\n` +
-            `It will stay hidden however many times it is asked for again. ` +
-            `Dismiss instead if you only mean "not now".`)) return;
+      let state = b.dataset.state;
+      if (b.dataset.confirm) {
+        state = await askToDelete(b.dataset.key);
+        if (!state) return;                      // cancelled, or dismissed with Esc
+      }
       b.disabled = true;
       await fetch("/curate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: b.dataset.key, state: b.dataset.state }),
+        body: JSON.stringify({ key: b.dataset.key, state }),
       });
       load();
     };
+  });
+}
+
+/* Resolves to the chosen state, or "" for cancel. Polling is held while it is open:
+   rows rearranging under a modal you are reading is disorienting, and the row you
+   were deciding about can move. */
+function askToDelete(key) {
+  const dlg = $("confirmDlg");
+  $("dlgKey").textContent = key;
+  dlg.returnValue = "";
+  modalOpen = true;
+  dlg.showModal();
+  return new Promise(resolve => {
+    dlg.addEventListener("close", () => {
+      modalOpen = false;
+      resolve(dlg.returnValue);
+    }, { once: true });
   });
 }
 
@@ -502,6 +580,6 @@ $("pause").onclick = e => {
   e.target.textContent = live ? "Live" : "Paused";
   e.target.setAttribute("aria-pressed", String(!live));
 };
-setInterval(() => { if (live) load(); }, 3000);
+setInterval(() => { if (live && !modalOpen) load(); }, 3000);
 load();
 </script>
