@@ -58,7 +58,7 @@ usage:
 DASHBOARD_PORT ?= 8010
 
 dashboard:
-	@DASHBOARD_PORT=$(DASHBOARD_PORT) $(PY) scripts/dashboard.py
+	@CONTEXT_ROOT=dist/staging DASHBOARD_PORT=$(DASHBOARD_PORT) $(PY) scripts/dashboard.py
 
 demo: package
 	CONTEXT_ROOT=dist/staging $(PY) scripts/demo.py

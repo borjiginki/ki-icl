@@ -6,6 +6,8 @@ log written before the telemetry change must still render.
 
 from __future__ import annotations
 
+import json
+import os
 import sys
 from pathlib import Path
 
@@ -291,3 +293,106 @@ def test_filtering_by_hours_drops_older_records(records):
 
 def test_no_filter_is_the_identity(records):
     assert filter_records(records, domain="", hours=0) == records
+
+
+# --- the catalog, when the log has no snapshot of it -------------------------
+
+
+def test_what_exists_now_is_read_from_disk_not_only_from_the_log(tmp_path: Path):
+    """The log's catalog record is emitted once, at server start. Clearing the log
+    (routine, between tests) therefore silently killed `now written`, `existed, now
+    gone` and the header count until the MCP server happened to restart. What exists
+    now is a question about the tree, so ask the tree."""
+    records = [
+        {"ts": "2026-08-31T08:00:00.000Z", "event": "context_gap",
+         "session": "aaa", "domain": "hr", "topic": "expense-policy"},
+    ]
+
+    result = aggregate(records, catalog={"artifacts": {"hr/expense-policy": "v1"},
+                                         "artifact_count": 1, "domain_count": 1, "bytes": 10})
+
+    assert result["misses"][0]["exists_now"] is True
+    assert result["catalog"]["artifact_count"] == 1
+
+
+def test_a_catalog_read_from_disk_wins_over_a_stale_one_in_the_log(tmp_path: Path):
+    records = [
+        {"ts": "2026-08-31T07:00:00.000Z", "event": "catalog", "artifacts": {}},
+        {"ts": "2026-08-31T08:00:00.000Z", "event": "context_gap",
+         "session": "aaa", "domain": "hr", "topic": "expense-policy"},
+    ]
+
+    result = aggregate(records, catalog={"artifacts": {"hr/expense-policy": "v1"}})
+
+    assert result["misses"][0]["exists_now"] is True
+
+
+def test_history_still_comes_from_the_log(tmp_path: Path):
+    """`ever_existed` is the one thing the tree cannot answer: it means the artifact
+    was there and is not any more, which only the old snapshots record."""
+    records = [
+        {"ts": "2026-08-31T07:00:00.000Z", "event": "catalog",
+         "artifacts": {"hr/retired-thing": "v1"}},
+        {"ts": "2026-08-31T08:00:00.000Z", "event": "context_use", "session": "aaa",
+         "tool": "get_artifact", "domain": "hr", "id": "retired-thing",
+         "outcome": "not_found"},
+    ]
+
+    row = aggregate(records, catalog={"artifacts": {}})["misses"][0]
+
+    assert row["ever_existed"] is True
+    assert row["exists_now"] is False
+
+
+def test_no_catalog_anywhere_is_not_an_error(tmp_path: Path):
+    result = aggregate([{"ts": "2026-08-31T08:00:00.000Z", "event": "context_gap",
+                         "session": "aaa", "domain": "hr", "topic": "x"}])
+
+    assert result["catalog"] is None
+    assert result["misses"][0]["exists_now"] is False
+
+
+def test_the_dashboard_serves_a_live_catalog_when_run_as_a_script(tmp_path: Path):
+    """Run as `python scripts/dashboard.py`, only scripts/ is on sys.path, so the
+    `server.*` import inside `live_catalog` fails and is swallowed by its own
+    fallback. Nothing in-process catches that, because pytest puts the repo root on
+    the path itself. Only launching it the way the Makefile does will.
+    """
+    import socket
+    import subprocess
+    import time
+    import urllib.request
+
+    repo = Path(__file__).resolve().parent.parent
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+
+    log = tmp_path / "usage.jsonl"
+    log.write_text("", encoding="utf-8")
+    proc = subprocess.Popen(
+        [sys.executable, str(repo / "scripts" / "dashboard.py")],
+        env={**os.environ, "DASHBOARD_PORT": str(port),
+             "CONTEXT_ROOT": str(repo / "dist" / "staging"),
+             "CONTEXT_USAGE_LOG": str(log),
+             "CONTEXT_CURATION": str(tmp_path / "curation.json"),
+             "NO_BROWSER": "1"},
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    try:
+        payload = None
+        for _ in range(50):
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/data", timeout=1) as r:
+                    payload = json.loads(r.read())
+                break
+            except Exception:  # noqa: BLE001 — still starting
+                time.sleep(0.1)
+        assert payload is not None, "dashboard never came up"
+        # An empty log has no catalog record at all, so a catalog here can only have
+        # come from reading the tree.
+        assert payload["catalog"] is not None
+        assert payload["catalog"]["artifact_count"] > 0
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)

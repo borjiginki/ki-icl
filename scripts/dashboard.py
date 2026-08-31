@@ -17,6 +17,7 @@ import datetime
 import json
 import math
 import os
+import sys
 from collections import Counter, defaultdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -24,6 +25,9 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
+# Run directly (`python3 scripts/dashboard.py`) and only scripts/ lands on sys.path,
+# so `server.*` is unimportable and `live_catalog` would fail into its own fallback.
+sys.path.insert(0, str(ROOT))
 LOG = Path(os.environ.get("CONTEXT_USAGE_LOG", ROOT / "logs" / "usage.jsonl"))
 PAGE = ROOT / "server" / "dashboard.html"
 PORT = int(os.environ.get("DASHBOARD_PORT", "8010"))
@@ -238,9 +242,19 @@ def _pct(values: list[float], p: float) -> float:
 
 
 def aggregate(
-    records: list[dict[str, Any]], curation: dict[str, Any] | None = None
+    records: list[dict[str, Any]],
+    curation: dict[str, Any] | None = None,
+    catalog: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Everything the page draws, computed once."""
+    """Everything the page draws, computed once.
+
+    `catalog` is what the tree holds right now, read from disk. The log carries
+    catalog snapshots too, but only one per server start, so clearing the log between
+    tests silently killed `now written`, `existed, now gone` and the header count
+    until the server next happened to restart. What exists *now* is a question about
+    the tree, so it is answered by the tree; the log's snapshots answer only what
+    existed *once*, which the tree cannot know.
+    """
     marks = {e["key"]: e for e in (curation or {}).get("entries", [])}
     gaps = [r for r in records if r.get("event") == "context_gap" and r.get("topic")]
     calls = [r for r in records if r.get("event") == "context_use"]
@@ -256,12 +270,18 @@ def aggregate(
     # Everything the catalog has ever held, so a miss can be told apart from a deletion.
     ever: set[str] = set()
     known_domains: set[str] = set()
-    now: set[str] = set()   # what the LATEST catalog holds, for the resolved claim
+    now: set[str] = set()   # what the catalog holds today, for the resolved claim
     for record in records:
         if record.get("event") == "catalog":
-            now = set(record.get("artifacts") or {})
-            ever |= now
-            known_domains |= {key.split("/")[0] for key in now}
+            snapshot = set(record.get("artifacts") or {})
+            ever |= snapshot
+            known_domains |= {key.split("/")[0] for key in snapshot}
+            if catalog is None:  # no live read available: the newest snapshot stands in
+                now = snapshot
+    if catalog is not None:
+        now = set(catalog.get("artifacts") or {})
+        ever |= now
+        known_domains |= {key.split("/")[0] for key in now}
 
     visible_misses, curated_misses = _misses(missed, gaps, ever, now, marks)
 
@@ -280,9 +300,8 @@ def aggregate(
             for r in hits
             if r.get("bytes") is not None and r.get("duration_ms") is not None
         ],
-        "catalog": next(
-            (r for r in reversed(records) if r.get("event") == "catalog"), None
-        ),
+        "catalog": catalog
+        or next((r for r in reversed(records) if r.get("event") == "catalog"), None),
         # Only domains that exist: a mistyped one is a fact about the past, not a
         # place to filter to. A log written before catalog records existed has none,
         # so fall back to whatever the calls mention.
@@ -520,6 +539,26 @@ def _latency(calls: list[dict]) -> list[dict[str, Any]]:
     )
 
 
+def live_catalog() -> dict[str, Any] | None:
+    """What the served tree holds right now, or None if it cannot be read.
+
+    Reuses the server's own `catalog_record` rather than a second implementation, so
+    a live read and a logged snapshot can never disagree about shape. Cheap enough to
+    do per poll: it is a stat of a small tree.
+    """
+    try:
+        from server.artifacts import ARTIFACTS_ROOT
+        from server.usage import catalog_record
+
+        record = catalog_record(ARTIFACTS_ROOT)
+    except Exception:  # noqa: BLE001 — a dashboard must render without the tree
+        return None
+    # An empty read means CONTEXT_ROOT points somewhere without a tree, not that the
+    # corpus is empty. Overriding a real logged snapshot with that would turn a
+    # misconfiguration into "nothing exists", which is worse than knowing nothing.
+    return record if record["artifact_count"] else None
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler's name
         if self.path.startswith("/data"):
@@ -529,7 +568,11 @@ class Handler(BaseHTTPRequestHandler):
                 domain=query.get("domain", [""])[0],
                 hours=float(query.get("hours", ["0"])[0] or 0),
             )
-            payload = aggregate(records, curation=read_curation(CURATION))
+            payload = aggregate(
+                records,
+                curation=read_curation(CURATION),
+                catalog=live_catalog(),
+            )
             self._send(json.dumps(payload).encode(), "application/json")
         else:
             self._send(PAGE.read_bytes(), "text/html; charset=utf-8")
