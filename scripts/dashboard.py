@@ -44,6 +44,46 @@ def read_records(path: Path) -> list[dict[str, Any]]:
     return out
 
 
+CURATION = Path(os.environ.get("CONTEXT_CURATION", ROOT / "logs" / "curation.json"))
+
+
+def read_curation(path: Path) -> dict[str, Any]:
+    """Which suggestions have been dismissed. Missing or corrupt reads as none.
+
+    Kept apart from the usage log on purpose: the log is an append-only record of what
+    happened, this is a record of what somebody decided. Mixing them makes both harder
+    to reason about, and in production they belong in entirely different places.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return {"dismissed": [str(k) for k in data.get("dismissed", [])]}
+    except (OSError, ValueError, AttributeError):
+        return {"dismissed": []}
+
+
+def _write_curation(path: Path, state: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+
+
+def dismiss(path: Path, key: str) -> dict[str, Any]:
+    """Hide one suggestion. Idempotent, and undone by `restore`."""
+    state = read_curation(path)
+    if key not in state["dismissed"]:
+        state["dismissed"].append(key)
+        _write_curation(path, state)
+    return state
+
+
+def restore(path: Path, key: str) -> dict[str, Any]:
+    """Put a dismissed suggestion back. Harmless if it was never dismissed."""
+    state = read_curation(path)
+    if key in state["dismissed"]:
+        state["dismissed"].remove(key)
+        _write_curation(path, state)
+    return state
+
+
 def filter_records(
     records: list[dict[str, Any]], *, domain: str = "", hours: float = 0, now: str = ""
 ) -> list[dict[str, Any]]:
@@ -93,8 +133,12 @@ def _pct(values: list[float], p: float) -> float:
     return round(ordered[min(rank, len(ordered)) - 1], 1)
 
 
-def aggregate(records: list[dict[str, Any]]) -> dict[str, Any]:
+def aggregate(
+    records: list[dict[str, Any]], curation: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Everything the page draws, computed once."""
+    dismissed = set((curation or {}).get("dismissed", []))
+    gaps = [r for r in records if r.get("event") == "context_gap" and r.get("topic")]
     calls = [r for r in records if r.get("event") == "context_use"]
     fetches = [r for r in calls if r.get("tool") == "get_artifact" and r.get("id")]
     hits = [r for r in fetches if r.get("outcome") == "found"]
@@ -113,9 +157,12 @@ def aggregate(records: list[dict[str, Any]]) -> dict[str, Any]:
             ever |= set(record.get("artifacts") or {})
             known_domains |= {key.split("/")[0] for key in record.get("artifacts") or {}}
 
+    visible_misses, dismissed_misses = _misses(missed, gaps, ever, dismissed)
+
     return {
         "kpi": _kpi(calls, fetches, hits, records),
-        "misses": _misses(missed, ever),
+        "misses": visible_misses,
+        "dismissed": dismissed_misses,
         "served": _served(hits),
         "funnel": _funnel(calls),
         "offered": _offered(calls),
@@ -153,24 +200,48 @@ def _kpi(calls, fetches, hits, records) -> dict[str, Any]:
     }
 
 
-def _misses(missed: list[dict], ever: set[str]) -> list[dict[str, Any]]:
-    """The panel that pays for the logging: what people asked for and did not get."""
-    grouped: dict[str, list[dict]] = defaultdict(list)
+def _misses(
+    missed: list[dict], gaps: list[dict], ever: set[str], dismissed: set[str]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """What is wanted and not there, from both signals, minus what you dismissed.
+
+    Two ways a want becomes visible, and they are not equal evidence:
+
+    - `reported`: an agent read the manifest, found no answer, and said so through
+      `report_gap`. Deliberate, and the only signal that survives a well-behaved
+      agent, which is the common case.
+    - `guessed`: an agent asked for an id that does not exist. Incidental, and it also
+      catches a stale client asking for something that was deleted.
+
+    Returns (visible, dismissed) so a dismissal that keeps being asked for stays
+    reviewable rather than vanishing.
+    """
+    grouped: dict[str, list[tuple[str, dict]]] = defaultdict(list)
     for record in missed:
-        grouped[_key(record)].append(record)
-    rows = [
-        {
-            "key": key,
-            "count": len(group),
-            "first": min(r.get("ts", "") for r in group),
-            "last": max(r.get("ts", "") for r in group),
-            "sessions": len({r["session"] for r in group if r.get("session")}),
-            # True means it was in the catalog once, so this is a deletion, not a gap.
-            "ever_existed": key in ever,
-        }
-        for key, group in grouped.items()
-    ]
-    return sorted(rows, key=lambda r: (-r["count"], r["key"]))
+        grouped[_key(record)].append(("guessed", record))
+    for record in gaps:
+        grouped[f"{record.get('domain')}/{record.get('topic')}"].append(("reported", record))
+
+    rows = []
+    for key, entries in grouped.items():
+        group = [r for _, r in entries]
+        rows.append(
+            {
+                "key": key,
+                "count": len(group),
+                "first": min(r.get("ts", "") for r in group),
+                "last": max(r.get("ts", "") for r in group),
+                "sessions": len({r["session"] for r in group if r.get("session")}),
+                "sources": sorted({source for source, _ in entries}),
+                # True means it was in the catalog once, so this is a deletion.
+                "ever_existed": key in ever,
+            }
+        )
+    rows.sort(key=lambda r: (-r["count"], r["key"]))
+    return (
+        [r for r in rows if r["key"] not in dismissed],
+        [r for r in rows if r["key"] in dismissed],
+    )
 
 
 def _served(hits: list[dict]) -> list[dict[str, Any]]:
@@ -328,9 +399,29 @@ class Handler(BaseHTTPRequestHandler):
                 domain=query.get("domain", [""])[0],
                 hours=float(query.get("hours", ["0"])[0] or 0),
             )
-            self._send(json.dumps(aggregate(records)).encode(), "application/json")
+            payload = aggregate(records, curation=read_curation(CURATION))
+            self._send(json.dumps(payload).encode(), "application/json")
         else:
             self._send(PAGE.read_bytes(), "text/html; charset=utf-8")
+
+    def do_POST(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler's name
+        """Dismiss or restore one suggestion. The only write this server does, and it
+        touches the curation file, never the usage log."""
+        route = urlparse(self.path).path
+        if route not in ("/dismiss", "/restore"):
+            self.send_error(404)
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            key = json.loads(self.rfile.read(length) or b"{}").get("key", "")
+        except (ValueError, OSError):
+            self.send_error(400)
+            return
+        if not key:
+            self.send_error(400)
+            return
+        action = dismiss if route == "/dismiss" else restore
+        self._send(json.dumps(action(CURATION, str(key))).encode(), "application/json")
 
     def _send(self, body: bytes, content_type: str) -> None:
         self.send_response(200)

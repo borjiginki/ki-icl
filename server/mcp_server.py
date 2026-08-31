@@ -23,7 +23,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fastmcp import FastMCP  # noqa: E402
 
 from server import artifacts  # noqa: E402
-from server.usage import USAGE_LOG, ContextUsageMiddleware, catalog_record  # noqa: E402
+
+# The module, not `from ... import USAGE_LOG`: importing the sink by value creates a
+# second binding that silently diverges from the one the middleware writes through.
+from server import usage  # noqa: E402
+from server.usage import ContextUsageMiddleware  # noqa: E402
 
 mcp = FastMCP(
     name="ki-icl",
@@ -33,7 +37,11 @@ mcp = FastMCP(
         "`get_domain_manifest(domain)` to choose, then `get_artifact(domain, ids)`. "
         "Use these when the user asks what KI group does, offers, or requires, as "
         "opposed to how to perform a task. A `not_found` means no artifact has that "
-        "id: say so, and never substitute a similar one."
+        "id: say so, and never substitute a similar one.\n\n"
+        "If the manifest has no answer for what was asked, call "
+        "`report_gap(domain, topic)` before you reply, so the gap is recorded and can "
+        "be written up. Reading a manifest and finding nothing otherwise leaves no "
+        "trace at all, and the corpus never learns what it is missing."
     ),
 )
 mcp.add_middleware(ContextUsageMiddleware())
@@ -80,11 +88,58 @@ def get_artifact(domain: str, ids: str | list[str], max_file_bytes: int = 1_048_
     return json.dumps(payload, indent=2)
 
 
+@mcp.tool
+def report_gap(domain: str, topic: str) -> str:
+    """Record that the context layer had no answer, so the gap can be written up.
+
+    Call this when you have read `get_domain_manifest` and nothing in it answers what
+    the user asked. Without it that need is invisible: reading a manifest and finding
+    nothing leaves no trace, so the corpus never learns what it is missing.
+
+    Call it once per genuine gap, and only for things that plausibly belong in a
+    company knowledge base: a policy, a methodology, an offering, a guideline. Do not
+    report one-off trivia, anything specific to a single person or client, or a
+    question the user could not reasonably expect the company to have documented.
+
+    `topic` is a short kebab-case label naming the missing document, the way an
+    artifact id would look, for example `parental-leave` or `onboarding`. It is NOT
+    the user's question: never pass their words, their name, client details, or any
+    sentence. Overlong or free-text topics are rejected.
+
+    Args:
+        domain: Domain id it would belong to, from `list_domains`. Your best guess is fine.
+        topic: Short kebab-case label for the missing document, at most 5 words.
+    """
+    record = usage.gap_record(domain, topic)
+    if record is None:
+        return json.dumps(
+            {
+                "status": "rejected",
+                "reason": (
+                    "`topic` must be a short kebab-case label naming the missing "
+                    "document (for example `parental-leave`), at most 5 words and 48 "
+                    "characters. It is not the user's question. Nothing was recorded."
+                ),
+            },
+            indent=2,
+        )
+    usage.USAGE_LOG.write({**usage.current_correlation(), **record})
+    return json.dumps(
+        {
+            "status": "recorded",
+            "domain": record["domain"],
+            "topic": record["topic"],
+            "note": "Recorded as a gap. Tell the user it is not available; do not invent an answer.",
+        },
+        indent=2,
+    )
+
+
 if __name__ == "__main__":
     print(f"serving {artifacts.ARTIFACTS_ROOT}", file=sys.stderr)
     # One snapshot of what exists, so the dashboard can tell a miss for something that
     # never existed from a miss for something that was deleted.
-    USAGE_LOG.write(catalog_record(artifacts.ARTIFACTS_ROOT))
+    usage.USAGE_LOG.write(usage.catalog_record(artifacts.ARTIFACTS_ROOT))
     if "--http" in sys.argv:
         mcp.run(transport="http", host="127.0.0.1", port=8000)
     else:

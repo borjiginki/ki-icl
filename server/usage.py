@@ -32,6 +32,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -87,6 +88,45 @@ def records_from_call(tool: str, arguments: dict, payload: dict) -> list[dict[st
             record["skipped"] = len(entry.get("skipped_files", []))
         records.append(record)
     return records
+
+
+# A topic is a label, not a sentence. The cap is what stops this becoming a store of
+# user questions, which would carry NDA-covered material and personal data with no
+# Art. 6 basis. Same shape as an artifact id, so a reported gap reads as a proposed
+# filename and can be adopted as one.
+MAX_TOPIC_LENGTH = 48
+MAX_TOPIC_SEGMENTS = 5
+_TOPIC_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+
+
+def normalise_topic(raw: str) -> str | None:
+    """A kebab-case label, or None when the input is not one and cannot become one.
+
+    Forgiving about shape (case, spaces, underscores) and strict about content: an
+    agent should not have to guess the exact casing to be heard, but it must not be
+    able to post a sentence.
+    """
+    if not isinstance(raw, str):
+        return None
+    slug = re.sub(r"[\s_]+", "-", raw.strip().lower())
+    slug = re.sub(r"-{2,}", "-", slug).strip("-")
+    if not slug or len(slug) > MAX_TOPIC_LENGTH:
+        return None
+    if len(slug.split("-")) > MAX_TOPIC_SEGMENTS:
+        return None
+    return slug if _TOPIC_PATTERN.match(slug) else None
+
+
+def gap_record(domain: str, topic: str) -> dict[str, Any] | None:
+    """One "the manifest had no answer for this" record. None if the topic is unusable.
+
+    Carries the topic and the domain and nothing else. Never the question that
+    prompted it.
+    """
+    slug = normalise_topic(topic)
+    if slug is None:
+        return None
+    return {"event": "context_gap", "domain": str(domain), "topic": slug}
 
 
 def catalog_record(root: Path) -> dict[str, Any]:
@@ -186,6 +226,31 @@ def _correlation(context: MiddlewareContext) -> dict[str, Any]:
     stamp = _attr(context, "timestamp")
     if isinstance(stamp, datetime.datetime):
         fields["ts"] = stamp.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    return fields
+
+
+def current_correlation() -> dict[str, Any]:
+    """The same session/seq fields, read from inside a tool body rather than middleware.
+
+    A tool has no MiddlewareContext, so it reaches the request context the way FastMCP
+    intends. Absent outside a request, and the record is still written without it.
+    """
+    try:
+        from fastmcp.server.dependencies import get_context
+
+        ctx = get_context()
+    except Exception:  # noqa: BLE001 — no request context
+        return {}
+    fields: dict[str, Any] = {}
+    session = _attr(ctx, "session_id")
+    if isinstance(session, str) and session:
+        fields["session"] = session[:8]
+    request_id = _attr(ctx, "request_id")
+    if request_id is not None:
+        try:
+            fields["seq"] = int(request_id)
+        except (TypeError, ValueError):
+            fields["seq"] = str(request_id)
     return fields
 
 

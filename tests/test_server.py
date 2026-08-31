@@ -18,7 +18,7 @@ async def test_all_three_tools_are_registered_under_their_exact_names():
 
     names = {t.name for t in await mcp.list_tools()}
 
-    assert {"list_domains", "get_domain_manifest", "get_artifact"} <= names
+    assert {"list_domains", "get_domain_manifest", "get_artifact", "report_gap"} <= names
 
 
 async def test_every_tool_returns_the_payload_the_read_path_built(monkeypatch, catalog: Path):
@@ -49,6 +49,25 @@ async def test_get_artifact_accepts_a_list_of_ids_over_the_wire(monkeypatch, cat
     )
 
     assert [a["status"] for a in fetched["artifacts"]] == ["found", "not_found"]
+
+
+async def test_the_instructions_tell_an_agent_to_report_a_gap():
+    """Without this the tool exists and is never called: an agent that finds nothing
+    has no reason to think anyone wants to know."""
+    from server.mcp_server import mcp
+
+    assert "report_gap" in (mcp.instructions or "")
+
+
+async def test_report_gap_forbids_passing_the_users_words():
+    """The docstring is the tool description the model sees, and the privacy rule has
+    to reach the model, not just the validator."""
+    from server.mcp_server import mcp
+
+    doc = ((await mcp.get_tool("report_gap")).description or "").lower()
+
+    assert "kebab-case" in doc
+    assert "never pass their words" in doc
 
 
 async def test_get_artifact_tells_the_model_not_to_substitute_a_similar_id():
@@ -88,7 +107,7 @@ async def test_the_script_runs_as_a_subprocess_the_way_a_stdio_client_launches_i
         names = {t.name for t in await client.list_tools()}
         result = await client.call_tool("list_domains", {})
 
-    assert {"list_domains", "get_domain_manifest", "get_artifact"} <= names
+    assert {"list_domains", "get_domain_manifest", "get_artifact", "report_gap"} <= names
     assert json.loads(result.content[0].text)["domains"][0]["id"] == "company"
     # First line is the startup catalog snapshot; the call follows it.
     lines = [json.loads(line) for line in usage_log.read_text().strip().splitlines()]

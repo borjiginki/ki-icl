@@ -72,6 +72,28 @@ Repository size risk is entirely a binaries risk, and the allow-list removes it.
 | `list_domains()` | one row per domain, forever. The cold-start entry point. |
 | `get_domain_manifest(domain)` | one row per artifact, with descriptions to choose from. No file bodies. |
 | `get_artifact(domain, ids)` | full text. Accepts one id or a list; each is answered independently. |
+| `report_gap(domain, topic)` | records that the manifest had no answer, so the gap can be written up. |
+
+### Why `report_gap` exists
+
+Tested against real agents, the read path alone loses the signal it most needs.
+
+Ask an agent about something the corpus does not cover and it does the right thing: reads the manifest, sees nothing matching, and says so.
+It never calls `get_artifact`, so **nothing is recorded**, and the demand is invisible.
+The better the agent behaves, the less the system learns.
+
+`report_gap` gives it somewhere to put the finding.
+The `topic` is a constrained kebab-case label, never the user's question, so the privacy position is unchanged: a topic label is not free text and cannot carry a sentence.
+Overlong or non-conforming topics are rejected with an explanation rather than silently normalised into nonsense.
+
+The dashboard shows both signals and distinguishes them, because they are not equal evidence:
+
+- **reported** &mdash; an agent read the manifest, found no answer, and said so. Deliberate, and the only signal that survives a well-behaved agent.
+- **guessed** &mdash; an agent asked for an id that does not exist. Incidental, but it is also what catches a stale client asking for something that was deleted.
+
+Suggestions arrive filtered only by the agent's judgement, so every row has a one-click **dismiss**.
+Dismissed rows stay listed in a collapsed section with their counts still updating, so a dismissal that keeps being asked for is visible as a mistake rather than gone.
+Dismissals live in `logs/curation.json`, deliberately apart from the usage log: the log records what happened, curation records what you decided, and in production those belong in different places.
 
 Every answer carries an opaque `version_id`, taken from the last commit that touched that artifact's folder.
 Compare it for equality to detect staleness.
