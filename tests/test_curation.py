@@ -4,14 +4,16 @@ Suggestions arrive filtered only by the agent's judgement, so the panel is usefu
 only if clearing it is one click. Curation decisions are not telemetry, so they live
 in their own file rather than in the append-only log.
 
-Three states, and they differ in what happens when demand arrives afterwards:
+Two marks, and they differ in what happens when demand arrives afterwards:
 
 - `dismissed`  not now. Comes back if asked for again: a dismissal is a judgement on
                the demand so far, and more demand is new information.
 - `resolved`   written up. Comes back, flagged, if it is *still* being missed, which
                means the artifact is not actually reachable and something is broken.
-- `deleted`    never want to see this. Confirmed at the UI, and never returns on its
-               own. Restorable, so a mistake is recoverable.
+
+Both are undoable, and neither hides a row forever. "Never want to see this again" is
+not a mark at all: it is `purge`, which removes the records that produced the
+suggestion, and it lives in tests/test_purge.py.
 """
 
 from __future__ import annotations
@@ -160,94 +162,22 @@ def test_a_row_says_whether_the_artifact_now_exists(records, tmp_path: Path):
     assert rows["hr/office-plants"]["exists_now"] is False
 
 
-# --- deleted ----------------------------------------------------------------
+# --- deleting for good ------------------------------------------------------
 
 
-def test_a_deleted_row_leaves_both_working_lists(records, tmp_path: Path):
-    """Deleted means gone. Leaving it in the handled list is just a slower dismiss,
-    and the confirmation is what makes that safe to mean literally."""
-    curation = tmp_path / "c.json"
-    curate(curation, "hr/office-plants", "deleted", count=1)
-
-    result = state_of(records, curation)
-
-    assert "hr/office-plants" not in {r["key"] for r in result["misses"]}
-    assert "hr/office-plants" not in {r["key"] for r in result["curated"]}
+def test_there_is_no_mark_meaning_deleted(records, tmp_path: Path):
+    """Deleting for good is `purge`, which removes the records. A mark that had to
+    hold forever would be an invisible tombstone, and it would swallow the next
+    person who asks. See tests/test_purge.py."""
+    with pytest.raises(ValueError):
+        curate(tmp_path / "c.json", "hr/office-plants", "deleted", count=1)
 
 
-def test_a_deleted_row_never_returns_however_much_demand_arrives(records, tmp_path: Path):
-    curation = tmp_path / "c.json"
-    curate(curation, "hr/office-plants", "deleted", count=1)
-    for n in range(5):
-        records.append(rec(event="context_gap", session=f"s{n}",
-                           domain="hr", topic="office-plants"))
-
-    result = state_of(records, curation)
-
-    assert "hr/office-plants" not in {r["key"] for r in result["misses"]}
-    assert "hr/office-plants" not in {r["key"] for r in result["curated"]}
-
-
-def test_a_deleted_row_is_still_accounted_for_somewhere(records, tmp_path: Path):
-    """Out of the working lists, but not out of existence. A panel that discards a
-    signal without saying so is lying by omission, and the operator has no way to
-    find out: the mark lives in a file nobody reads."""
-    curation = tmp_path / "c.json"
-    curate(curation, "hr/office-plants", "deleted", count=1)
-
-    result = state_of(records, curation)
-
-    assert [r["key"] for r in result["suppressed"]] == ["hr/office-plants"]
-
-
-def test_a_suppressed_row_counts_the_demand_that_arrived_after_deleting(records, tmp_path: Path):
-    """Deleting is a judgement made at a moment. Asking again afterwards does not
-    undo it, but it is the one fact that would make somebody reconsider."""
-    curation = tmp_path / "c.json"
-    curate(curation, "hr/parental-leave", "deleted", count=2)
-    for n in range(3):
-        records.append(rec(event="context_gap", session=f"s{n}",
-                           domain="hr", topic="parental-leave"))
-
-    row = next(r for r in state_of(records, curation)["suppressed"]
-               if r["key"] == "hr/parental-leave")
-
-    assert row["since"] == 3
-    assert row["count"] == 5
-
-
-def test_a_quiet_deleted_row_reports_no_demand_since(records, tmp_path: Path):
-    curation = tmp_path / "c.json"
-    curate(curation, "hr/office-plants", "deleted", count=2)
-
-    assert state_of(records, curation)["suppressed"][0]["since"] == 0
-
-
-def test_only_deleted_rows_are_suppressed(records, tmp_path: Path):
+def test_every_mark_that_hides_a_row_can_be_undone(records, tmp_path: Path):
+    """Nothing in the curation file hides a row permanently, so no accumulating
+    state can build up behind the panel."""
     curation = tmp_path / "c.json"
     curate(curation, "hr/office-plants", "dismissed", count=1)
-    curate(curation, "hr/onboarding", "resolved", count=1)
-
-    assert state_of(records, curation)["suppressed"] == []
-
-
-def test_dismissed_and_resolved_still_appear_in_the_handled_list(records, tmp_path: Path):
-    """Only `deleted` vanishes. The other two are decisions you can revisit."""
-    curation = tmp_path / "c.json"
-    curate(curation, "hr/office-plants", "dismissed", count=1)
-    curate(curation, "hr/onboarding", "resolved", count=1)
-    curate(curation, "hr/parental-leave", "deleted", count=2)
-
-    handled = {r["key"]: r["state"] for r in state_of(records, curation)["curated"]}
-
-    assert handled == {"hr/office-plants": "dismissed", "hr/onboarding": "resolved"}
-
-
-def test_a_deleted_row_is_recoverable_by_clearing_the_mark(records, tmp_path: Path):
-    """No longer reachable from the UI by design, but the curation file is a plain
-    document somebody can edit when they regret it."""
-    curation = tmp_path / "c.json"
-    curate(curation, "hr/office-plants", "deleted", count=1)
     curate(curation, "hr/office-plants", "active")
 
     assert "hr/office-plants" in {r["key"] for r in state_of(records, curation)["misses"]}
@@ -268,7 +198,7 @@ def test_curating_the_same_key_twice_replaces_rather_than_duplicates(tmp_path: P
 
 def test_setting_active_removes_the_entry_entirely(tmp_path: Path):
     curation = tmp_path / "c.json"
-    curate(curation, "hr/x", "deleted", count=1)
+    curate(curation, "hr/x", "dismissed", count=1)
     curate(curation, "hr/x", "active")
 
     assert read_curation(curation)["entries"] == []
@@ -307,9 +237,10 @@ def test_a_missing_or_corrupt_curation_file_reads_as_nothing_curated(tmp_path: P
 
 
 def test_curation_does_not_touch_the_usage_log(records, tmp_path: Path):
-    """Curation is a decision, not an observation. The log stays append-only."""
+    """Curation is a decision, not an observation, and it never edits the log.
+    `purge` is the single exception, and it is a separate function for that reason."""
     before = json.dumps(records)
 
-    curate(tmp_path / "c.json", "hr/office-plants", "deleted", count=1)
+    curate(tmp_path / "c.json", "hr/office-plants", "dismissed", count=1)
 
     assert json.dumps(records) == before

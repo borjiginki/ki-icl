@@ -71,7 +71,7 @@
   tr:hover .mini { border-color: var(--line); }
   .mini:hover { color: var(--ink); border-color: var(--ink-3); background: var(--surface); }
   .mini[data-state="resolved"]:hover { color: var(--good); border-color: var(--good); }
-  .mini[data-state="deleted"]:hover  { color: var(--crit); border-color: var(--crit); }
+  .mini[data-state="purge"]:hover    { color: var(--crit); border-color: var(--crit); }
   .mini[data-state="active"]:hover   { color: var(--seq);  border-color: var(--seq); }
   .mini:disabled { opacity: .35; cursor: default; }
   .mini:focus-visible { outline: 2px solid var(--seq); outline-offset: 1px; }
@@ -133,10 +133,10 @@
     <h2>What to write next</h2>
     <p class="note">Wanted and not there, ranked by demand. <b>reported</b> means an agent read the manifest,
        found no answer and said so; <b>guessed</b> means it asked for an id that does not exist.
-       <b>resolved</b> once written, <b>dismiss</b> for not now, <b>delete</b> for never.
-       Dismissed and resolved rows come back if demand grows; a resolved one coming back means the
-       artifact exists but is not reachable. Deleted rows never return on their own, but stay
-       counted under <b>Deleted</b> below.</p>
+       <b>resolved</b> once written, <b>dismiss</b> for not now, both of which come back if demand
+       grows; a resolved one coming back means the artifact exists but is not reachable.
+       <b>delete</b> erases the records behind a suggestion, so it leaves the dashboard entirely
+       and starts from scratch if anyone asks again.</p>
     <div id="misses"></div>
   </section>
 
@@ -194,16 +194,18 @@
     <div class="dlg-body">
       <h3>Delete this suggestion?</h3>
       <code class="dlg-key" id="dlgKey"></code>
-      <p>It leaves the list for good and never returns on its own, however many times
-         it is asked for again. It stays counted under <b>Deleted</b>, where you can
-         see if it keeps being asked for and put it back deliberately.</p>
-      <p>If you only mean <b>not now</b>, dismiss it instead: a dismissed suggestion
-         comes back on its own once demand grows.</p>
+      <p>This <b>erases the records</b> that produced it from the usage log, so it is
+         gone from the dashboard entirely rather than filed away. The lookups it
+         removes also leave the counters above. There is no undo.</p>
+      <p>If somebody asks for it again later it will reappear as a new suggestion,
+         starting from one.</p>
+      <p>If you only mean <b>not now</b>, dismiss it instead: nothing is erased, and
+         it comes back on its own once demand grows.</p>
     </div>
     <div class="dlg-foot">
       <button value="" class="btn-quiet" autofocus>Cancel</button>
       <button value="dismissed">Dismiss instead</button>
-      <button value="deleted" class="btn-danger">Delete</button>
+      <button value="purge" class="btn-danger">Delete for good</button>
     </div>
   </form>
 </dialog>
@@ -214,7 +216,7 @@ const tip = $("tip");
 let DATA = null, live = true;
 /* The 3s poll rebuilds the panel, which destroys the <details> element and takes its
    open state with it. Held out here so re-rendering does not shut it in your face. */
-let dismissedOpen = false, deletedOpen = false, modalOpen = false;
+let dismissedOpen = false, modalOpen = false;
 
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const nf = n => (n ?? 0).toLocaleString();
@@ -308,7 +310,7 @@ const sourceTag = s => s === "reported"
   ? '<span class="tag">&#9998; reported</span>'
   : '<span class="tag">&#63; guessed</span>';
 
-const STATE_LABEL = { dismissed: "dismissed", resolved: "resolved", deleted: "deleted" };
+const STATE_LABEL = { dismissed: "dismissed", resolved: "resolved" };
 
 function returnedTag(r) {
   /* `resolved` coming back is the urgent one: the document exists and people are
@@ -320,23 +322,16 @@ function returnedTag(r) {
   return `<span class="tag" style="border-color:${colour};color:${colour}">&#8635; ${what}</span>`;
 }
 
-function sinceTag(r) {
-  return `<span class="tag" style="border-color:var(--crit);color:var(--crit)">&#9888;&#65039;
-    asked ${r.since}&#215; since you deleted it</span>`;
-}
-
-/* mode: "open" (the working list) | "curated" (handled) | "suppressed" (deleted). */
-function missRow(r, max, mode) {
+function missRow(r, max, curated) {
   const button = (state, label, title, confirm) =>
     `<button class="mini" data-state="${state}" data-key="${esc(r.key)}" title="${title}"
              ${confirm ? 'data-confirm="1"' : ""}>${label}</button>`;
-  const actions = `<div class="actions">${mode !== "open"
+  const actions = `<div class="actions">${curated
     ? button("active", "&#8617; restore", "Put it back on the list")
     : button("resolved", "&#10003; resolved", "Written up. Returns if it is still being missed.") +
       button("dismissed", "&#8211; not now", "Returns if demand grows.") +
-      button("deleted", "&#215; delete", "Remove for good. Asks first; no undo.", true)
+      button("purge", "&#215; delete", "Deletes the records behind it. Asks first.", true)
   }</div>`;
-  const curated = mode === "curated";
   return `<tr>
     <td class="id">${esc(r.key)}
       <div style="height:4px;margin-top:4px;border-radius:2px;background:var(--seq);width:${(r.count/max*100).toFixed(0)}%"></div>
@@ -348,28 +343,22 @@ function missRow(r, max, mode) {
         ${r.exists_now ? '<span class="tag" style="border-color:var(--good);color:var(--good)">&#10003; now written</span>' : ""}
         ${r.ever_existed && !r.exists_now ? '<span class="tag">&#9888;&#65039; existed, now gone</span>' : ""}
         ${r.returned ? returnedTag(r) : ""}
-        ${r.since > 0 ? sinceTag(r) : ""}
         ${curated ? `<span class="tag">${STATE_LABEL[r.state] || esc(r.state)}</span>` : ""}</td>
     <td class="n" style="white-space:nowrap">${actions}</td>
   </tr>`;
 }
 
-function misses(rows, curatedRows, deletedRows) {
+function misses(rows, curatedRows) {
   const host = $("misses");
-  const all = rows.concat(curatedRows, deletedRows);
+  const all = rows.concat(curatedRows);
   if (!all.length) {
     return empty(host, "Nothing wanted and missing yet. Either the corpus covers what people ask for, or nobody has asked.");
   }
   const max = Math.max(...all.map(r => r.count), 1);
-  /* Deleting hides a row for good, so the count of what is being hidden has to stay
-     visible: a panel that quietly drops a signal somebody keeps sending is lying by
-     omission, and the mark itself lives in a file nobody reads. */
-  const nagging = deletedRows.filter(r => r.since > 0).length;
-
   host.innerHTML = (rows.length ? `<div class="scroll"><table>
     <tr><th>Artifact</th><th class="n">Asked</th><th class="n">Sessions</th><th>Last</th>
         <th>How</th><th></th></tr>
-    ${rows.map(r => missRow(r, max, "open")).join("")}</table></div>`
+    ${rows.map(r => missRow(r, max, false)).join("")}</table></div>`
     : `<p class="empty">Everything suggested so far has been dealt with.</p>`) +
     (curatedRows.length ? `
       <details id="dismissedBox" style="margin-top:12px"${dismissedOpen ? " open" : ""}>
@@ -377,25 +366,12 @@ function misses(rows, curatedRows, deletedRows) {
           Handled (${curatedRows.length}) &mdash; these come back on their own if demand grows
         </summary>
         <div class="scroll" style="margin-top:8px;opacity:.72"><table>
-          ${curatedRows.map(r => missRow(r, max, "curated")).join("")}
-        </table></div>
-      </details>` : "") +
-    (deletedRows.length ? `
-      <details id="deletedBox" style="margin-top:8px"${deletedOpen ? " open" : ""}>
-        <summary style="cursor:pointer;font-size:12px;color:var(--ink-3)">
-          Deleted (${deletedRows.length}) &mdash; these never come back on their own${nagging
-            ? `, but <strong style="color:var(--crit)">${nagging}</strong> ${
-                nagging === 1 ? "has been" : "have been"} asked for since` : ""}
-        </summary>
-        <div class="scroll" style="margin-top:8px;opacity:.6"><table>
-          ${deletedRows.map(r => missRow(r, max, "suppressed")).join("")}
+          ${curatedRows.map(r => missRow(r, max, true)).join("")}
         </table></div>
       </details>` : "");
 
   const box = $("dismissedBox");
   if (box) box.ontoggle = () => { dismissedOpen = box.open; };
-  const del = $("deletedBox");
-  if (del) del.ontoggle = () => { deletedOpen = del.open; };
 
   host.querySelectorAll("button[data-state]").forEach(b => {
     b.onclick = async () => {
@@ -405,7 +381,9 @@ function misses(rows, curatedRows, deletedRows) {
         if (!state) return;                      // cancelled, or dismissed with Esc
       }
       b.disabled = true;
-      await fetch("/curate", {
+      /* Two endpoints, because the consequences differ: /curate writes a mark you can
+         undo, /purge edits the log itself and cannot be undone. */
+      await fetch(state === "purge" ? "/purge" : "/curate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key: b.dataset.key, state }),
@@ -582,7 +560,7 @@ function scatter(points) {
 /* --- wiring ------------------------------------------------------------------ */
 function render(d) {
   DATA = d;
-  kpis(d.kpi); misses(d.misses, d.curated || [], d.suppressed || []); hbars($("served"), d.served, {
+  kpis(d.kpi); misses(d.misses, d.curated || []); hbars($("served"), d.served, {
     label: r => r.key, value: r => r.count,
     caption: r => `${r.key} — ${r.count} fetches, ${bytes(r.bytes)}, last ${ago(r.last)}`,
   });

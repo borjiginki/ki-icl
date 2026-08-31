@@ -56,11 +56,13 @@ CURATION_STATES = {
     # Written up. Returns, flagged, if it is STILL being missed, because that means
     # the artifact is not reachable and something is broken.
     "resolved",
-    # Never want to see this. Confirmed at the UI, never returns on its own.
-    "deleted",
     # Not a stored state: clears the entry.
     "active",
 }
+# There is deliberately no `deleted` state. A mark that must hold forever is a
+# tombstone: it accumulates, nothing shows it, and it silently swallows the next
+# person to ask for the same thing. Deleting for good is `purge`, which goes at the
+# records instead, so there is nothing left to remember.
 _RETURNS_ON_DEMAND = {"dismissed", "resolved"}
 
 
@@ -126,6 +128,64 @@ def curate(path: Path, key: str, state: str, count: int = 0) -> dict[str, Any]:
     current["entries"] = entries
     _write_curation(path, current)
     return current
+
+
+def _is_demand_for(record: dict[str, Any], key: str) -> bool:
+    """True for a record that is why `key` appears as a suggestion.
+
+    The two demand signals, and nothing else: a reported gap, and a lookup that came
+    back `not_found`. A successful fetch of the same id is not demand, it is use.
+    """
+    if record.get("event") == "context_gap" and record.get("topic"):
+        return f"{record.get('domain')}/{record.get('topic')}" == key
+    if record.get("event") == "context_use" and record.get("outcome") == "not_found":
+        return _key(record) == key
+    return False
+
+
+def purge(log_path: Path, curation_path: Path, key: str) -> dict[str, Any]:
+    """Delete one suggestion for good, by removing what produced it.
+
+    Dismiss and resolve are filters over the log. Delete cannot be, because a filter
+    that must hold forever is invisible accumulating state that swallows whoever asks
+    next. So this goes at the source: the demand records for `key` are removed, the
+    mark for it is cleared, and one `purge` record is appended saying what went.
+
+    Nothing is left to remember, so nothing can be silently suppressed. If somebody
+    asks again afterwards the suggestion returns as a new one, having earned it.
+
+    The audit record is the price of the log no longer being append-only: counts
+    change here, and the file has to be able to explain that itself.
+
+    Rewritten through a temporary file and one atomic replace, so a reader never sees
+    a half-written log. A record appended by a server process during the rewrite is
+    still lost, which is a real race and an accepted one at this scale: purging is a
+    deliberate human action and the log is written only on tool calls.
+    """
+    if not log_path.is_file():
+        return {"key": key, "removed": 0}
+
+    kept: list[str] = []
+    removed = 0
+    for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            record = json.loads(line)
+        except ValueError:
+            kept.append(line)  # not ours to decide about; it stays
+            continue
+        if isinstance(record, dict) and _is_demand_for(record, key):
+            removed += 1
+            continue
+        kept.append(line)
+
+    if removed:
+        kept.append(json.dumps({"ts": _utcnow(), "event": "purge", "key": key, "removed": removed}))
+        temp = log_path.with_suffix(log_path.suffix + ".tmp")
+        temp.write_text("\n".join(kept) + "\n", encoding="utf-8")
+        temp.replace(log_path)
+
+    curate(curation_path, key, "active")
+    return {"key": key, "removed": removed}
 
 
 def filter_records(
@@ -203,13 +263,12 @@ def aggregate(
             ever |= now
             known_domains |= {key.split("/")[0] for key in now}
 
-    visible_misses, curated_misses, suppressed_misses = _misses(missed, gaps, ever, now, marks)
+    visible_misses, curated_misses = _misses(missed, gaps, ever, now, marks)
 
     return {
         "kpi": _kpi(calls, fetches, hits, records),
         "misses": visible_misses,
         "curated": curated_misses,
-        "suppressed": suppressed_misses,
         "served": _served(hits),
         "funnel": _funnel(calls),
         "offered": _offered(calls),
@@ -253,7 +312,7 @@ def _misses(
     ever: set[str],
     now: set[str],
     marks: dict[str, dict],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """What is wanted and not there, from both signals, minus what you dismissed.
 
     Two ways a want becomes visible, and they are not equal evidence:
@@ -264,9 +323,9 @@ def _misses(
     - `guessed`: an agent asked for an id that does not exist. Incidental, and it also
       catches a stale client asking for something that was deleted.
 
-    Returns (visible, curated, suppressed). `suppressed` is the deleted ones: out of
-    both working lists, because deleted means gone, but still counted, because a panel
-    that silently discards a signal is lying by omission and nobody can find out.
+    Returns (visible, curated) so a mark that keeps being asked for stays reviewable
+    rather than vanishing. Nothing is hidden permanently here: a suggestion you never
+    want to see again is removed by `purge`, at the records rather than behind a mark.
     """
     grouped: dict[str, list[tuple[str, dict]]] = defaultdict(list)
     for record in missed:
@@ -293,19 +352,11 @@ def _misses(
         )
     rows.sort(key=lambda r: (-r["count"], r["key"]))
 
-    visible, curated, suppressed = [], [], []
+    visible, curated = [], []
     for row in rows:
         entry = marks.get(row["key"])
         if entry is None:
             visible.append(row)
-        elif entry["state"] == "deleted":
-            # Never back into either working list, however much demand arrives. But
-            # `since` is recorded, because "you deleted this and eleven people have
-            # asked for it since" is the one fact that would change somebody's mind,
-            # and it is invisible everywhere else.
-            suppressed.append(
-                {**row, "since": max(0, row["count"] - entry["count"]), "marked_at": entry["at"]}
-            )
         elif entry["state"] in _RETURNS_ON_DEMAND and row["count"] > entry["count"]:
             # Marked, then asked for again. That is new information, and burying it
             # would make the panel lie by omission — most sharply for `resolved`,
@@ -320,7 +371,7 @@ def _misses(
             )
         else:
             curated.append({**row, "state": entry["state"], "marked_at": entry["at"]})
-    return visible, curated, suppressed
+    return visible, curated
 
 
 def _served(hits: list[dict]) -> list[dict[str, Any]]:
@@ -484,28 +535,39 @@ class Handler(BaseHTTPRequestHandler):
             self._send(PAGE.read_bytes(), "text/html; charset=utf-8")
 
     def do_POST(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler's name
-        """Dismiss or restore one suggestion. The only write this server does, and it
-        touches the curation file, never the usage log."""
-        if urlparse(self.path).path != "/curate":
+        """Mark one suggestion (`/curate`), or delete it for good (`/purge`).
+
+        `/curate` writes only the curation file. `/purge` is the one thing in the
+        system that edits the usage log, which is why it is a separate route and not
+        another state: the two have entirely different consequences.
+        """
+        route = urlparse(self.path).path
+        if route not in ("/curate", "/purge"):
             self.send_error(404)
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
             body = json.loads(self.rfile.read(length) or b"{}")
-            key, state = str(body.get("key", "")), str(body.get("state", ""))
+            key = str(body.get("key", ""))
+            state = str(body.get("state", ""))
         except (ValueError, OSError):
             self.send_error(400)
             return
-        if not key or state not in CURATION_STATES:
+        if not key:
+            self.send_error(400)
+            return
+
+        if route == "/purge":
+            self._send(json.dumps(purge(LOG, CURATION, key)).encode(), "application/json")
+            return
+
+        if state not in CURATION_STATES:
             self.send_error(400)
             return
         # Baseline computed here, not taken from the client: it is the demand the
         # person was actually looking at when they made the decision.
         current = aggregate(read_records(LOG), curation=read_curation(CURATION))
-        counts = {
-            r["key"]: r["count"]
-            for r in current["misses"] + current["curated"] + current["suppressed"]
-        }
+        counts = {r["key"]: r["count"] for r in current["misses"] + current["curated"]}
         self._send(
             json.dumps(curate(CURATION, key, state, counts.get(key, 0))).encode(),
             "application/json",

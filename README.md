@@ -92,23 +92,32 @@ The dashboard shows both signals and distinguishes them, because they are not eq
 - **guessed** &mdash; an agent asked for an id that does not exist. Incidental, but it is also what catches a stale client asking for something that was deleted.
 
 Suggestions arrive filtered only by the agent's judgement, so every row carries three actions.
-They differ only in what happens when more demand arrives afterwards, which is the whole reason there are three:
+They differ in what happens when more demand arrives afterwards, which is the whole reason there are three:
 
 | Action | Meaning | If it is asked for again |
 |---|---|---|
 | **resolved** | written up | comes back, flagged in red. The document exists and people are still missing it, so it is not reachable and something is broken |
 | **dismiss** | not now | comes back. A dismissal judges the demand so far, and more demand is new information |
-| **delete** | never | leaves the list for good and never returns on its own. Asks for confirmation, then moves to a collapsed **Deleted** list that counts how often it has been asked for since, and offers restore |
+| **delete** | never | nothing to come back to. Asks for confirmation, then erases the records that produced the suggestion. If somebody asks again it returns as a new row, starting from one |
 
-Deleted rows stay counted rather than vanishing.
-A panel that silently discards a signal somebody keeps sending is lying by omission, and the operator has no way to find out: the mark lives in a file nobody reads.
-"You deleted this and eleven people have asked for it since" is the one fact that would change somebody's mind, so it is the one fact the panel must not swallow.
+Dismiss and resolve are marks, which are filters over the log.
+Delete deliberately is not, and that is the one interesting decision in this panel.
 
-Each decision records the demand it was made at, which is what makes it revisitable rather than a permanent mute.
+A mark that has to hold forever is a tombstone: it accumulates, nothing on the page shows it, and it silently swallows the next person who asks for the same thing.
+That is not hypothetical.
+It cost a real test cycle here: a row was deleted while trying the button out, an agent reported that exact gap thirty seconds later, and the dashboard showed nothing with no way to find out why.
+
+So delete goes at the source instead.
+`purge` removes the demand records for that key, clears any mark it had, and appends one `purge` record saying what it removed, because the log stops being append-only at that moment and has to be able to explain its own counts.
+Nothing is left to remember, so nothing can be silently suppressed.
+The cost, stated in the confirmation dialog: those lookups also leave the counters, and there is no undo.
+
+Each mark records the demand it was made at, which is what makes it revisitable rather than a permanent mute.
 Re-marking raises the baseline, so "seen it, still not writing it" holds until the next time somebody asks.
 A row also shows **now written** when the id appears in the current catalog, so marking something resolved is a claim the catalog can corroborate.
 
 Curation lives in `logs/curation.json`, deliberately apart from the usage log: the log records what happened, curation records what you decided, and in production those belong in different places.
+`purge` is the single exception that touches both, which is why it is a separate function and a separate endpoint rather than a fourth state.
 
 Every answer carries an opaque `version_id`, taken from the last commit that touched that artifact's folder.
 Compare it for equality to detect staleness.
