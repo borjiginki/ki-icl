@@ -77,7 +77,7 @@ def test_gaps_rank_above_less_wanted_ones(records):
 
 def test_a_dismissed_row_disappears_from_the_panel(records, tmp_path: Path):
     curation = tmp_path / "curation.json"
-    dismiss(curation, "hr/office-plants")
+    dismiss(curation, "hr/office-plants", count=1)
 
     keys = {r["key"] for r in aggregate(records, curation=read_curation(curation))["misses"]}
 
@@ -89,7 +89,7 @@ def test_a_dismissed_row_is_still_listed_separately_with_its_current_count(recor
     """Dismiss something that keeps getting asked for and you should be able to see
     you got it wrong."""
     curation = tmp_path / "curation.json"
-    dismiss(curation, "hr/parental-leave")
+    dismiss(curation, "hr/parental-leave", count=2)
 
     result = aggregate(records, curation=read_curation(curation))
 
@@ -100,7 +100,7 @@ def test_a_dismissed_row_is_still_listed_separately_with_its_current_count(recor
 
 def test_restoring_puts_a_row_back(records, tmp_path: Path):
     curation = tmp_path / "curation.json"
-    dismiss(curation, "hr/office-plants")
+    dismiss(curation, "hr/office-plants", count=1)
     restore(curation, "hr/office-plants")
 
     keys = {r["key"] for r in aggregate(records, curation=read_curation(curation))["misses"]}
@@ -110,10 +110,73 @@ def test_restoring_puts_a_row_back(records, tmp_path: Path):
 
 def test_dismissing_twice_is_harmless(tmp_path: Path):
     curation = tmp_path / "curation.json"
-    dismiss(curation, "hr/x")
-    dismiss(curation, "hr/x")
+    dismiss(curation, "hr/x", count=1)
+    dismiss(curation, "hr/x", count=1)
 
-    assert read_curation(curation)["dismissed"] == ["hr/x"]
+    assert [d["key"] for d in read_curation(curation)["dismissed"]] == ["hr/x"]
+
+
+# --- a dismissal is a judgement on the evidence so far, not a permanent mute ---
+
+
+def test_new_demand_after_a_dismissal_brings_the_row_back(records, tmp_path: Path):
+    """Dismissing means "not worth writing given what I have seen". Somebody asking
+    again is new information, and burying it makes the panel lie by omission."""
+    curation = tmp_path / "curation.json"
+    dismiss(curation, "hr/parental-leave", count=2)   # the count when it was dismissed
+
+    records.append(rec(event="context_gap", session="zzz",
+                       domain="hr", topic="parental-leave"))
+    result = aggregate(records, curation=read_curation(curation))
+
+    keys = {r["key"] for r in result["misses"]}
+    assert "hr/parental-leave" in keys
+    assert result["dismissed"] == []
+
+
+def test_a_row_that_came_back_says_so(records, tmp_path: Path):
+    curation = tmp_path / "curation.json"
+    dismiss(curation, "hr/parental-leave", count=2)
+    records.append(rec(event="context_gap", session="zzz",
+                       domain="hr", topic="parental-leave"))
+
+    row = next(r for r in aggregate(records, curation=read_curation(curation))["misses"]
+               if r["key"] == "hr/parental-leave")
+
+    assert row["returned"] is True
+
+
+def test_a_dismissal_holds_while_nothing_new_arrives(records, tmp_path: Path):
+    curation = tmp_path / "curation.json"
+    dismiss(curation, "hr/office-plants", count=1)
+
+    result = aggregate(records, curation=read_curation(curation))
+
+    assert "hr/office-plants" not in {r["key"] for r in result["misses"]}
+    assert [r["key"] for r in result["dismissed"]] == ["hr/office-plants"]
+
+
+def test_re_dismissing_a_returned_row_resets_the_baseline(records, tmp_path: Path):
+    curation = tmp_path / "curation.json"
+    dismiss(curation, "hr/parental-leave", count=2)
+    records.append(rec(event="context_gap", session="zzz",
+                       domain="hr", topic="parental-leave"))
+    dismiss(curation, "hr/parental-leave", count=3)   # seen it, still not writing it
+
+    result = aggregate(records, curation=read_curation(curation))
+
+    assert "hr/parental-leave" not in {r["key"] for r in result["misses"]}
+
+
+def test_a_legacy_plain_string_dismissal_still_reads(tmp_path: Path):
+    """The first version stored bare keys with no baseline."""
+    curation = tmp_path / "curation.json"
+    curation.write_text(json.dumps({"dismissed": ["hr/x"]}), encoding="utf-8")
+
+    (entry,) = read_curation(curation)["dismissed"]
+
+    assert entry["key"] == "hr/x"
+    assert entry["count"] == 0   # unknown baseline: show it again rather than hide it
 
 
 def test_restoring_something_never_dismissed_is_harmless(tmp_path: Path):
@@ -136,6 +199,6 @@ def test_dismissal_does_not_touch_the_usage_log(records, tmp_path: Path):
     curation = tmp_path / "curation.json"
     before = json.dumps(records)
 
-    dismiss(curation, "hr/office-plants")
+    dismiss(curation, "hr/office-plants", count=1)
 
     assert json.dumps(records) == before

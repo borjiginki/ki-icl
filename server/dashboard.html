@@ -97,7 +97,7 @@
     <h2>What to write next</h2>
     <p class="note">Wanted and not there, ranked by demand. <b>reported</b> means an agent read the manifest,
        found no answer and said so; <b>guessed</b> means it asked for an id that does not exist.
-       Dismiss anything not worth writing; dismissed rows stay reviewable below.</p>
+       Dismiss anything not worth writing. A dismissal is a judgement on the demand so far, so if it is asked for again the row comes back.</p>
     <div id="misses"></div>
   </section>
 
@@ -150,6 +150,9 @@
 const $ = id => document.getElementById(id);
 const tip = $("tip");
 let DATA = null, live = true;
+/* The 3s poll rebuilds the panel, which destroys the <details> element and takes its
+   open state with it. Held out here so re-rendering does not shut it in your face. */
+let dismissedOpen = false;
 
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const nf = n => (n ?? 0).toLocaleString();
@@ -242,7 +245,8 @@ function missRow(r, max, dismissed) {
     <td class="n">${r.sessions || "–"}</td>
     <td>${esc(ago(r.last))}</td>
     <td>${(r.sources || []).map(sourceTag).join(" ")}
-        ${r.ever_existed ? '<span class="tag">&#9888;&#65039; existed, now gone</span>' : ""}</td>
+        ${r.ever_existed ? '<span class="tag">&#9888;&#65039; existed, now gone</span>' : ""}
+        ${r.returned ? `<span class="tag" style="border-color:var(--seq);color:var(--seq)">&#8635; asked again since you dismissed it (was ${r.dismissed_at_count})</span>` : ""}</td>
     <td class="n"><button class="mini" data-act="${dismissed ? "restore" : "dismiss"}"
         data-key="${esc(r.key)}">${dismissed ? "restore" : "dismiss"}</button></td>
   </tr>`;
@@ -261,14 +265,17 @@ function misses(rows, dismissedRows) {
     ${rows.map(r => missRow(r, max, false)).join("")}</table></div>`
     : `<p class="empty">Everything suggested so far has been dismissed.</p>`) +
     (dismissedRows.length ? `
-      <details style="margin-top:12px">
+      <details id="dismissedBox" style="margin-top:12px"${dismissedOpen ? " open" : ""}>
         <summary style="cursor:pointer;font-size:12px;color:var(--ink-3)">
-          Dismissed (${dismissedRows.length}) &mdash; counts keep updating, so you can see if you were wrong
+          Dismissed (${dismissedRows.length}) &mdash; they come back on their own if demand grows
         </summary>
         <div class="scroll" style="margin-top:8px;opacity:.72"><table>
           ${dismissedRows.map(r => missRow(r, max, true)).join("")}
         </table></div>
       </details>` : "");
+
+  const box = $("dismissedBox");
+  if (box) box.ontoggle = () => { dismissedOpen = box.open; };
 
   host.querySelectorAll("button[data-act]").forEach(b => {
     b.onclick = async () => {
