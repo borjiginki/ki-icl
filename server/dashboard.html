@@ -135,7 +135,8 @@
        found no answer and said so; <b>guessed</b> means it asked for an id that does not exist.
        <b>resolved</b> once written, <b>dismiss</b> for not now, <b>delete</b> for never.
        Dismissed and resolved rows come back if demand grows; a resolved one coming back means the
-       artifact exists but is not reachable. Deleted rows are gone for good.</p>
+       artifact exists but is not reachable. Deleted rows never return on their own, but stay
+       counted under <b>Deleted</b> below.</p>
     <div id="misses"></div>
   </section>
 
@@ -193,8 +194,9 @@
     <div class="dlg-body">
       <h3>Delete this suggestion?</h3>
       <code class="dlg-key" id="dlgKey"></code>
-      <p>It disappears from this panel for good, however many times it is asked for
-         again. There is no undo here.</p>
+      <p>It leaves the list for good and never returns on its own, however many times
+         it is asked for again. It stays counted under <b>Deleted</b>, where you can
+         see if it keeps being asked for and put it back deliberately.</p>
       <p>If you only mean <b>not now</b>, dismiss it instead: a dismissed suggestion
          comes back on its own once demand grows.</p>
     </div>
@@ -212,7 +214,7 @@ const tip = $("tip");
 let DATA = null, live = true;
 /* The 3s poll rebuilds the panel, which destroys the <details> element and takes its
    open state with it. Held out here so re-rendering does not shut it in your face. */
-let dismissedOpen = false, modalOpen = false;
+let dismissedOpen = false, deletedOpen = false, modalOpen = false;
 
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const nf = n => (n ?? 0).toLocaleString();
@@ -225,6 +227,16 @@ const ago = ts => {
   if (s < 5400) return Math.round(s/60) + "m ago";
   if (s < 172800) return Math.round(s/3600) + "h ago";
   return Math.round(s/86400) + "d ago";
+};
+
+/* The log is UTC, which is right for a log and wrong for an axis: a Berlin reader
+   saw 10:00 against a wall clock reading 12:00 and concluded nothing was recorded.
+   Every time shown to a person is in the reader's own zone. */
+const localHour = (hour, withDate) => {
+  const d = new Date(hour + ":00:00Z");
+  if (isNaN(d)) return hour;
+  const t = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return withDate ? `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${t}` : t;
 };
 
 /* Hover layer: every mark gets one, sized bigger than the mark itself. */
@@ -308,16 +320,23 @@ function returnedTag(r) {
   return `<span class="tag" style="border-color:${colour};color:${colour}">&#8635; ${what}</span>`;
 }
 
-function missRow(r, max, curated) {
+function sinceTag(r) {
+  return `<span class="tag" style="border-color:var(--crit);color:var(--crit)">&#9888;&#65039;
+    asked ${r.since}&#215; since you deleted it</span>`;
+}
+
+/* mode: "open" (the working list) | "curated" (handled) | "suppressed" (deleted). */
+function missRow(r, max, mode) {
   const button = (state, label, title, confirm) =>
     `<button class="mini" data-state="${state}" data-key="${esc(r.key)}" title="${title}"
              ${confirm ? 'data-confirm="1"' : ""}>${label}</button>`;
-  const actions = `<div class="actions">${curated
+  const actions = `<div class="actions">${mode !== "open"
     ? button("active", "&#8617; restore", "Put it back on the list")
     : button("resolved", "&#10003; resolved", "Written up. Returns if it is still being missed.") +
       button("dismissed", "&#8211; not now", "Returns if demand grows.") +
       button("deleted", "&#215; delete", "Remove for good. Asks first; no undo.", true)
   }</div>`;
+  const curated = mode === "curated";
   return `<tr>
     <td class="id">${esc(r.key)}
       <div style="height:4px;margin-top:4px;border-radius:2px;background:var(--seq);width:${(r.count/max*100).toFixed(0)}%"></div>
@@ -329,22 +348,28 @@ function missRow(r, max, curated) {
         ${r.exists_now ? '<span class="tag" style="border-color:var(--good);color:var(--good)">&#10003; now written</span>' : ""}
         ${r.ever_existed && !r.exists_now ? '<span class="tag">&#9888;&#65039; existed, now gone</span>' : ""}
         ${r.returned ? returnedTag(r) : ""}
+        ${r.since > 0 ? sinceTag(r) : ""}
         ${curated ? `<span class="tag">${STATE_LABEL[r.state] || esc(r.state)}</span>` : ""}</td>
     <td class="n" style="white-space:nowrap">${actions}</td>
   </tr>`;
 }
 
-function misses(rows, curatedRows) {
+function misses(rows, curatedRows, deletedRows) {
   const host = $("misses");
-  const all = rows.concat(curatedRows);
+  const all = rows.concat(curatedRows, deletedRows);
   if (!all.length) {
     return empty(host, "Nothing wanted and missing yet. Either the corpus covers what people ask for, or nobody has asked.");
   }
   const max = Math.max(...all.map(r => r.count), 1);
+  /* Deleting hides a row for good, so the count of what is being hidden has to stay
+     visible: a panel that quietly drops a signal somebody keeps sending is lying by
+     omission, and the mark itself lives in a file nobody reads. */
+  const nagging = deletedRows.filter(r => r.since > 0).length;
+
   host.innerHTML = (rows.length ? `<div class="scroll"><table>
     <tr><th>Artifact</th><th class="n">Asked</th><th class="n">Sessions</th><th>Last</th>
         <th>How</th><th></th></tr>
-    ${rows.map(r => missRow(r, max, false)).join("")}</table></div>`
+    ${rows.map(r => missRow(r, max, "open")).join("")}</table></div>`
     : `<p class="empty">Everything suggested so far has been dealt with.</p>`) +
     (curatedRows.length ? `
       <details id="dismissedBox" style="margin-top:12px"${dismissedOpen ? " open" : ""}>
@@ -352,12 +377,25 @@ function misses(rows, curatedRows) {
           Handled (${curatedRows.length}) &mdash; these come back on their own if demand grows
         </summary>
         <div class="scroll" style="margin-top:8px;opacity:.72"><table>
-          ${curatedRows.map(r => missRow(r, max, true)).join("")}
+          ${curatedRows.map(r => missRow(r, max, "curated")).join("")}
+        </table></div>
+      </details>` : "") +
+    (deletedRows.length ? `
+      <details id="deletedBox" style="margin-top:8px"${deletedOpen ? " open" : ""}>
+        <summary style="cursor:pointer;font-size:12px;color:var(--ink-3)">
+          Deleted (${deletedRows.length}) &mdash; these never come back on their own${nagging
+            ? `, but <strong style="color:var(--crit)">${nagging}</strong> ${
+                nagging === 1 ? "has been" : "have been"} asked for since` : ""}
+        </summary>
+        <div class="scroll" style="margin-top:8px;opacity:.6"><table>
+          ${deletedRows.map(r => missRow(r, max, "suppressed")).join("")}
         </table></div>
       </details>` : "");
 
   const box = $("dismissedBox");
   if (box) box.ontoggle = () => { dismissedOpen = box.open; };
+  const del = $("deletedBox");
+  if (del) del.ontoggle = () => { deletedOpen = del.open; };
 
   host.querySelectorAll("button[data-state]").forEach(b => {
     b.onclick = async () => {
@@ -450,7 +488,7 @@ function activity(rows) {
       const bh = (n / max) * plot;
       y -= bh;
       const rect = node("rect", { x, y, width: bw, height: Math.max(2, bh - 2), rx: 2, fill });
-      hover(rect, `${r.hour.replace("T", " ")}:00 — ${n} ${name}`);
+      hover(rect, `${localHour(r.hour, true)} — ${n} ${name}`);
       s.appendChild(rect);
       y -= 2;
     });
@@ -458,7 +496,7 @@ function activity(rows) {
     if (i === 0 || i === show.length - 1 || show.length <= 6)
       s.appendChild(node("text",
         { x: x + bw / 2, y: plot + 13, class: "lab", "text-anchor": "middle" },
-        r.hour.slice(11) + ":00"));
+        localHour(r.hour)));
   });
   host.appendChild(s);
   host.insertAdjacentHTML("beforeend",
@@ -544,7 +582,7 @@ function scatter(points) {
 /* --- wiring ------------------------------------------------------------------ */
 function render(d) {
   DATA = d;
-  kpis(d.kpi); misses(d.misses, d.curated || []); hbars($("served"), d.served, {
+  kpis(d.kpi); misses(d.misses, d.curated || [], d.suppressed || []); hbars($("served"), d.served, {
     label: r => r.key, value: r => r.count,
     caption: r => `${r.key} — ${r.count} fetches, ${bytes(r.bytes)}, last ${ago(r.last)}`,
   });

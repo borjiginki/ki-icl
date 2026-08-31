@@ -163,7 +163,7 @@ def test_a_row_says_whether_the_artifact_now_exists(records, tmp_path: Path):
 # --- deleted ----------------------------------------------------------------
 
 
-def test_a_deleted_row_disappears_from_the_panel_entirely(records, tmp_path: Path):
+def test_a_deleted_row_leaves_both_working_lists(records, tmp_path: Path):
     """Deleted means gone. Leaving it in the handled list is just a slower dismiss,
     and the confirmation is what makes that safe to mean literally."""
     curation = tmp_path / "c.json"
@@ -186,6 +186,49 @@ def test_a_deleted_row_never_returns_however_much_demand_arrives(records, tmp_pa
 
     assert "hr/office-plants" not in {r["key"] for r in result["misses"]}
     assert "hr/office-plants" not in {r["key"] for r in result["curated"]}
+
+
+def test_a_deleted_row_is_still_accounted_for_somewhere(records, tmp_path: Path):
+    """Out of the working lists, but not out of existence. A panel that discards a
+    signal without saying so is lying by omission, and the operator has no way to
+    find out: the mark lives in a file nobody reads."""
+    curation = tmp_path / "c.json"
+    curate(curation, "hr/office-plants", "deleted", count=1)
+
+    result = state_of(records, curation)
+
+    assert [r["key"] for r in result["suppressed"]] == ["hr/office-plants"]
+
+
+def test_a_suppressed_row_counts_the_demand_that_arrived_after_deleting(records, tmp_path: Path):
+    """Deleting is a judgement made at a moment. Asking again afterwards does not
+    undo it, but it is the one fact that would make somebody reconsider."""
+    curation = tmp_path / "c.json"
+    curate(curation, "hr/parental-leave", "deleted", count=2)
+    for n in range(3):
+        records.append(rec(event="context_gap", session=f"s{n}",
+                           domain="hr", topic="parental-leave"))
+
+    row = next(r for r in state_of(records, curation)["suppressed"]
+               if r["key"] == "hr/parental-leave")
+
+    assert row["since"] == 3
+    assert row["count"] == 5
+
+
+def test_a_quiet_deleted_row_reports_no_demand_since(records, tmp_path: Path):
+    curation = tmp_path / "c.json"
+    curate(curation, "hr/office-plants", "deleted", count=2)
+
+    assert state_of(records, curation)["suppressed"][0]["since"] == 0
+
+
+def test_only_deleted_rows_are_suppressed(records, tmp_path: Path):
+    curation = tmp_path / "c.json"
+    curate(curation, "hr/office-plants", "dismissed", count=1)
+    curate(curation, "hr/onboarding", "resolved", count=1)
+
+    assert state_of(records, curation)["suppressed"] == []
 
 
 def test_dismissed_and_resolved_still_appear_in_the_handled_list(records, tmp_path: Path):

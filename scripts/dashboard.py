@@ -203,12 +203,13 @@ def aggregate(
             ever |= now
             known_domains |= {key.split("/")[0] for key in now}
 
-    visible_misses, curated_misses = _misses(missed, gaps, ever, now, marks)
+    visible_misses, curated_misses, suppressed_misses = _misses(missed, gaps, ever, now, marks)
 
     return {
         "kpi": _kpi(calls, fetches, hits, records),
         "misses": visible_misses,
         "curated": curated_misses,
+        "suppressed": suppressed_misses,
         "served": _served(hits),
         "funnel": _funnel(calls),
         "offered": _offered(calls),
@@ -252,7 +253,7 @@ def _misses(
     ever: set[str],
     now: set[str],
     marks: dict[str, dict],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """What is wanted and not there, from both signals, minus what you dismissed.
 
     Two ways a want becomes visible, and they are not equal evidence:
@@ -263,8 +264,9 @@ def _misses(
     - `guessed`: an agent asked for an id that does not exist. Incidental, and it also
       catches a stale client asking for something that was deleted.
 
-    Returns (visible, dismissed) so a dismissal that keeps being asked for stays
-    reviewable rather than vanishing.
+    Returns (visible, curated, suppressed). `suppressed` is the deleted ones: out of
+    both working lists, because deleted means gone, but still counted, because a panel
+    that silently discards a signal is lying by omission and nobody can find out.
     """
     grouped: dict[str, list[tuple[str, dict]]] = defaultdict(list)
     for record in missed:
@@ -291,11 +293,19 @@ def _misses(
         )
     rows.sort(key=lambda r: (-r["count"], r["key"]))
 
-    visible, curated = [], []
+    visible, curated, suppressed = [], [], []
     for row in rows:
         entry = marks.get(row["key"])
         if entry is None:
             visible.append(row)
+        elif entry["state"] == "deleted":
+            # Never back into either working list, however much demand arrives. But
+            # `since` is recorded, because "you deleted this and eleven people have
+            # asked for it since" is the one fact that would change somebody's mind,
+            # and it is invisible everywhere else.
+            suppressed.append(
+                {**row, "since": max(0, row["count"] - entry["count"]), "marked_at": entry["at"]}
+            )
         elif entry["state"] in _RETURNS_ON_DEMAND and row["count"] > entry["count"]:
             # Marked, then asked for again. That is new information, and burying it
             # would make the panel lie by omission — most sharply for `resolved`,
@@ -308,13 +318,9 @@ def _misses(
                     "marked_at_count": entry["count"],
                 }
             )
-        elif entry["state"] != "deleted":
+        else:
             curated.append({**row, "state": entry["state"], "marked_at": entry["at"]})
-        # `deleted` falls through to neither list: it means gone, and leaving it in
-        # the handled list would just be a slower dismiss. The confirmation is what
-        # makes that safe to mean literally. The mark stays in the curation file, so
-        # it is still recoverable by editing that document.
-    return visible, curated
+    return visible, curated, suppressed
 
 
 def _served(hits: list[dict]) -> list[dict[str, Any]]:
@@ -496,7 +502,10 @@ class Handler(BaseHTTPRequestHandler):
         # Baseline computed here, not taken from the client: it is the demand the
         # person was actually looking at when they made the decision.
         current = aggregate(read_records(LOG), curation=read_curation(CURATION))
-        counts = {r["key"]: r["count"] for r in current["misses"] + current["curated"]}
+        counts = {
+            r["key"]: r["count"]
+            for r in current["misses"] + current["curated"] + current["suppressed"]
+        }
         self._send(
             json.dumps(curate(CURATION, key, state, counts.get(key, 0))).encode(),
             "application/json",

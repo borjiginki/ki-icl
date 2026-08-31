@@ -98,7 +98,11 @@ They differ only in what happens when more demand arrives afterwards, which is t
 |---|---|---|
 | **resolved** | written up | comes back, flagged in red. The document exists and people are still missing it, so it is not reachable and something is broken |
 | **dismiss** | not now | comes back. A dismissal judges the demand so far, and more demand is new information |
-| **delete** | never | disappears from the panel for good. Asks for confirmation; the mark stays in `logs/curation.json`, so it is recoverable by editing that file but not from the UI |
+| **delete** | never | leaves the list for good and never returns on its own. Asks for confirmation, then moves to a collapsed **Deleted** list that counts how often it has been asked for since, and offers restore |
+
+Deleted rows stay counted rather than vanishing.
+A panel that silently discards a signal somebody keeps sending is lying by omission, and the operator has no way to find out: the mark lives in a file nobody reads.
+"You deleted this and eleven people have asked for it since" is the one fact that would change somebody's mind, so it is the one fact the panel must not swallow.
 
 Each decision records the demand it was made at, which is what makes it revisitable rather than a permanent mute.
 Re-marking raises the baseline, so "seen it, still not writing it" holds until the next time somebody asks.
