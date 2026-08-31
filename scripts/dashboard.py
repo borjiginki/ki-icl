@@ -47,12 +47,29 @@ def read_records(path: Path) -> list[dict[str, Any]]:
 CURATION = Path(os.environ.get("CONTEXT_CURATION", ROOT / "logs" / "curation.json"))
 
 
-def read_curation(path: Path) -> dict[str, Any]:
-    """Which suggestions have been dismissed, and at what demand. Missing reads as none.
+# What a suggestion can be marked as. They differ only in what happens when more
+# demand arrives afterwards, which is the whole point of having three.
+CURATION_STATES = {
+    # Not now. Returns if asked for again: a dismissal judges the demand so far, and
+    # more demand is new information.
+    "dismissed",
+    # Written up. Returns, flagged, if it is STILL being missed, because that means
+    # the artifact is not reachable and something is broken.
+    "resolved",
+    # Never want to see this. Confirmed at the UI, never returns on its own.
+    "deleted",
+    # Not a stored state: clears the entry.
+    "active",
+}
+_RETURNS_ON_DEMAND = {"dismissed", "resolved"}
 
-    Each entry is `{key, count, at}`, where `count` is the demand at the moment it was
-    dismissed. That baseline is what makes a dismissal a judgement on the evidence so
-    far rather than a permanent mute: more demand later brings the row back.
+
+def read_curation(path: Path) -> dict[str, Any]:
+    """What has been curated, and at what demand. Missing or corrupt reads as none.
+
+    Each entry is `{key, state, count, at}`, where `count` is the demand at the moment
+    the decision was made. That baseline is what lets a decision be revisited when more
+    demand arrives, rather than muting a topic forever.
 
     Kept apart from the usage log on purpose: the log is an append-only record of what
     happened, this is a record of what somebody decided. Mixing them makes both harder
@@ -60,23 +77,31 @@ def read_curation(path: Path) -> dict[str, Any]:
     """
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        entries = []
-        for item in data.get("dismissed", []):
-            if isinstance(item, str):
-                # First version stored bare keys. With no baseline, show it again
-                # rather than hide it: over-showing is recoverable, hiding is not.
-                entries.append({"key": item, "count": 0, "at": None})
-            elif isinstance(item, dict) and item.get("key"):
-                entries.append(
-                    {
-                        "key": str(item["key"]),
-                        "count": int(item.get("count") or 0),
-                        "at": item.get("at"),
-                    }
-                )
-        return {"dismissed": entries}
-    except (OSError, ValueError, AttributeError, TypeError):
-        return {"dismissed": []}
+    except (OSError, ValueError):
+        return {"entries": []}
+
+    raw = data.get("entries")
+    if raw is None:  # two earlier shapes, both meaning "dismissed"
+        raw = [
+            {"key": item, "count": 0} if isinstance(item, str) else item
+            for item in data.get("dismissed", [])
+        ]
+    entries = []
+    for item in raw or []:
+        if not isinstance(item, dict) or not item.get("key"):
+            continue
+        state = str(item.get("state", "dismissed"))
+        entries.append(
+            {
+                "key": str(item["key"]),
+                # An unrecognised state is treated as dismissed rather than dropped:
+                # hiding a row for an unknown reason is worse than showing it again.
+                "state": state if state in CURATION_STATES - {"active"} else "dismissed",
+                "count": int(item.get("count") or 0),
+                "at": item.get("at"),
+            }
+        )
+    return {"entries": entries}
 
 
 def _write_curation(path: Path, state: dict[str, Any]) -> None:
@@ -84,27 +109,23 @@ def _write_curation(path: Path, state: dict[str, Any]) -> None:
     path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
 
 
-def dismiss(path: Path, key: str, count: int = 0) -> dict[str, Any]:
-    """Hide one suggestion at its current demand. Idempotent; undone by `restore`.
+def curate(path: Path, key: str, state: str, count: int = 0) -> dict[str, Any]:
+    """Mark one suggestion. `active` clears the mark and puts it back on the list.
 
-    Re-dismissing an entry that came back raises the baseline, so "seen it, still not
-    writing it" holds until demand grows again.
+    Re-marking an entry that came back raises the baseline, so "seen it, still not
+    writing it" holds until it is asked for again.
     """
-    state = read_curation(path)
-    state["dismissed"] = [e for e in state["dismissed"] if e["key"] != key]
-    state["dismissed"].append({"key": key, "count": int(count), "at": _utcnow()})
-    _write_curation(path, state)
-    return state
-
-
-def restore(path: Path, key: str) -> dict[str, Any]:
-    """Put a dismissed suggestion back. Harmless if it was never dismissed."""
-    state = read_curation(path)
-    remaining = [e for e in state["dismissed"] if e["key"] != key]
-    if len(remaining) != len(state["dismissed"]):
-        state["dismissed"] = remaining
-        _write_curation(path, state)
-    return state
+    if state not in CURATION_STATES:
+        raise ValueError(f"unknown curation state {state!r}")
+    current = read_curation(path)
+    entries = [e for e in current["entries"] if e["key"] != key]
+    if state != "active":
+        entries.append(
+            {"key": key, "state": state, "count": int(count), "at": _utcnow()}
+        )
+    current["entries"] = entries
+    _write_curation(path, current)
+    return current
 
 
 def filter_records(
@@ -160,8 +181,7 @@ def aggregate(
     records: list[dict[str, Any]], curation: dict[str, Any] | None = None
 ) -> dict[str, Any]:
     """Everything the page draws, computed once."""
-    # key -> the demand it was dismissed at. More than that and it comes back.
-    dismissed = {e["key"]: e["count"] for e in (curation or {}).get("dismissed", [])}
+    marks = {e["key"]: e for e in (curation or {}).get("entries", [])}
     gaps = [r for r in records if r.get("event") == "context_gap" and r.get("topic")]
     calls = [r for r in records if r.get("event") == "context_use"]
     fetches = [r for r in calls if r.get("tool") == "get_artifact" and r.get("id")]
@@ -176,17 +196,19 @@ def aggregate(
     # Everything the catalog has ever held, so a miss can be told apart from a deletion.
     ever: set[str] = set()
     known_domains: set[str] = set()
+    now: set[str] = set()   # what the LATEST catalog holds, for the resolved claim
     for record in records:
         if record.get("event") == "catalog":
-            ever |= set(record.get("artifacts") or {})
-            known_domains |= {key.split("/")[0] for key in record.get("artifacts") or {}}
+            now = set(record.get("artifacts") or {})
+            ever |= now
+            known_domains |= {key.split("/")[0] for key in now}
 
-    visible_misses, dismissed_misses = _misses(missed, gaps, ever, dismissed)
+    visible_misses, curated_misses = _misses(missed, gaps, ever, now, marks)
 
     return {
         "kpi": _kpi(calls, fetches, hits, records),
         "misses": visible_misses,
-        "dismissed": dismissed_misses,
+        "curated": curated_misses,
         "served": _served(hits),
         "funnel": _funnel(calls),
         "offered": _offered(calls),
@@ -225,7 +247,11 @@ def _kpi(calls, fetches, hits, records) -> dict[str, Any]:
 
 
 def _misses(
-    missed: list[dict], gaps: list[dict], ever: set[str], dismissed: dict[str, int]
+    missed: list[dict],
+    gaps: list[dict],
+    ever: set[str],
+    now: set[str],
+    marks: dict[str, dict],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """What is wanted and not there, from both signals, minus what you dismissed.
 
@@ -259,22 +285,32 @@ def _misses(
                 "sources": sorted({source for source, _ in entries}),
                 # True means it was in the catalog once, so this is a deletion.
                 "ever_existed": key in ever,
+                # Marking something resolved is a claim; the catalog is the evidence.
+                "exists_now": key in now,
             }
         )
     rows.sort(key=lambda r: (-r["count"], r["key"]))
 
-    visible, hidden = [], []
+    visible, curated = [], []
     for row in rows:
-        baseline = dismissed.get(row["key"])
-        if baseline is None:
+        entry = marks.get(row["key"])
+        if entry is None:
             visible.append(row)
-        elif row["count"] > baseline:
-            # Dismissed, then asked for again. That is new information, and burying
-            # it would make the panel lie by omission.
-            visible.append({**row, "returned": True, "dismissed_at_count": baseline})
+        elif entry["state"] in _RETURNS_ON_DEMAND and row["count"] > entry["count"]:
+            # Marked, then asked for again. That is new information, and burying it
+            # would make the panel lie by omission — most sharply for `resolved`,
+            # where it means the artifact exists but is not reachable.
+            visible.append(
+                {
+                    **row,
+                    "returned": True,
+                    "was_state": entry["state"],
+                    "marked_at_count": entry["count"],
+                }
+            )
         else:
-            hidden.append(row)
-    return visible, hidden
+            curated.append({**row, "state": entry["state"], "marked_at": entry["at"]})
+    return visible, curated
 
 
 def _served(hits: list[dict]) -> list[dict[str, Any]]:
@@ -440,28 +476,27 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler's name
         """Dismiss or restore one suggestion. The only write this server does, and it
         touches the curation file, never the usage log."""
-        route = urlparse(self.path).path
-        if route not in ("/dismiss", "/restore"):
+        if urlparse(self.path).path != "/curate":
             self.send_error(404)
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            key = json.loads(self.rfile.read(length) or b"{}").get("key", "")
+            body = json.loads(self.rfile.read(length) or b"{}")
+            key, state = str(body.get("key", "")), str(body.get("state", ""))
         except (ValueError, OSError):
             self.send_error(400)
             return
-        if not key:
+        if not key or state not in CURATION_STATES:
             self.send_error(400)
             return
-        if route == "/restore":
-            state = restore(CURATION, str(key))
-        else:
-            # Baseline computed here, not taken from the client: it is the demand the
-            # person was actually looking at when they dismissed it.
-            current = aggregate(read_records(LOG))
-            counts = {r["key"]: r["count"] for r in current["misses"] + current["dismissed"]}
-            state = dismiss(CURATION, str(key), counts.get(str(key), 0))
-        self._send(json.dumps(state).encode(), "application/json")
+        # Baseline computed here, not taken from the client: it is the demand the
+        # person was actually looking at when they made the decision.
+        current = aggregate(read_records(LOG), curation=read_curation(CURATION))
+        counts = {r["key"]: r["count"] for r in current["misses"] + current["curated"]}
+        self._send(
+            json.dumps(curate(CURATION, key, state, counts.get(key, 0))).encode(),
+            "application/json",
+        )
 
     def _send(self, body: bytes, content_type: str) -> None:
         self.send_response(200)

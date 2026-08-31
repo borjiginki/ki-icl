@@ -91,9 +91,20 @@ The dashboard shows both signals and distinguishes them, because they are not eq
 - **reported** &mdash; an agent read the manifest, found no answer, and said so. Deliberate, and the only signal that survives a well-behaved agent.
 - **guessed** &mdash; an agent asked for an id that does not exist. Incidental, but it is also what catches a stale client asking for something that was deleted.
 
-Suggestions arrive filtered only by the agent's judgement, so every row has a one-click **dismiss**.
-Dismissed rows stay listed in a collapsed section with their counts still updating, so a dismissal that keeps being asked for is visible as a mistake rather than gone.
-Dismissals live in `logs/curation.json`, deliberately apart from the usage log: the log records what happened, curation records what you decided, and in production those belong in different places.
+Suggestions arrive filtered only by the agent's judgement, so every row carries three actions.
+They differ only in what happens when more demand arrives afterwards, which is the whole reason there are three:
+
+| Action | Meaning | If it is asked for again |
+|---|---|---|
+| **resolved** | written up | comes back, flagged in red. The document exists and people are still missing it, so it is not reachable and something is broken |
+| **dismiss** | not now | comes back. A dismissal judges the demand so far, and more demand is new information |
+| **delete** | never | stays gone. Asks for confirmation, and is still restorable from the handled list |
+
+Each decision records the demand it was made at, which is what makes it revisitable rather than a permanent mute.
+Re-marking raises the baseline, so "seen it, still not writing it" holds until the next time somebody asks.
+A row also shows **now written** when the id appears in the current catalog, so marking something resolved is a claim the catalog can corroborate.
+
+Curation lives in `logs/curation.json`, deliberately apart from the usage log: the log records what happened, curation records what you decided, and in production those belong in different places.
 
 Every answer carries an opaque `version_id`, taken from the last commit that touched that artifact's folder.
 Compare it for equality to detect staleness.

@@ -1,8 +1,17 @@
-"""Gaps on the dashboard, and dismissing the ones that are not worth writing.
+"""Gaps on the dashboard, and curating the suggestions.
 
-Suggestions arrive with no filtering beyond the agent's judgement, so the panel is
-only useful if clearing it is one click. Dismissals are curation decisions, not
-telemetry, so they live in their own file rather than in the append-only log.
+Suggestions arrive filtered only by the agent's judgement, so the panel is useful
+only if clearing it is one click. Curation decisions are not telemetry, so they live
+in their own file rather than in the append-only log.
+
+Three states, and they differ in what happens when demand arrives afterwards:
+
+- `dismissed`  not now. Comes back if asked for again: a dismissal is a judgement on
+               the demand so far, and more demand is new information.
+- `resolved`   written up. Comes back, flagged, if it is *still* being missed, which
+               means the artifact is not actually reachable and something is broken.
+- `deleted`    never want to see this. Confirmed at the UI, and never returns on its
+               own. Restorable, so a mistake is recoverable.
 """
 
 from __future__ import annotations
@@ -15,7 +24,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.dashboard import aggregate, dismiss, read_curation, restore  # noqa: E402
+from scripts.dashboard import aggregate, curate, read_curation  # noqa: E402
 
 
 def rec(**kw):
@@ -25,15 +34,21 @@ def rec(**kw):
 @pytest.fixture
 def records() -> list[dict]:
     return [
-        {"ts": "2026-08-31T07:59:00.000Z", "event": "catalog", "artifacts": {"hr/expense-policy": "v1"}},
-        # Two agents independently reported the same gap.
+        {"ts": "2026-08-31T07:59:00.000Z", "event": "catalog",
+         "artifacts": {"hr/expense-policy": "v1"}},
         rec(event="context_gap", session="aaa", domain="hr", topic="parental-leave"),
         rec(event="context_gap", session="bbb", domain="hr", topic="parental-leave"),
         rec(event="context_gap", session="ccc", domain="hr", topic="office-plants"),
-        # And one agent guessed an id instead of reporting.
         rec(event="context_use", session="ddd", tool="get_artifact", domain="hr",
             id="onboarding", outcome="not_found"),
     ]
+
+
+def state_of(records, curation_path):
+    return aggregate(records, curation=read_curation(curation_path))
+
+
+# --- the panel itself -------------------------------------------------------
 
 
 def test_a_reported_gap_appears_in_what_to_write_next(records):
@@ -41,12 +56,6 @@ def test_a_reported_gap_appears_in_what_to_write_next(records):
 
     assert rows["hr/parental-leave"]["count"] == 2
     assert rows["hr/parental-leave"]["sessions"] == 2
-
-
-def test_a_reported_gap_and_a_guessed_id_are_both_shown(records):
-    keys = {r["key"] for r in aggregate(records)["misses"]}
-
-    assert keys == {"hr/parental-leave", "hr/office-plants", "hr/onboarding"}
 
 
 def test_each_row_says_how_the_signal_arrived(records):
@@ -72,133 +81,167 @@ def test_gaps_rank_above_less_wanted_ones(records):
     assert aggregate(records)["misses"][0]["key"] == "hr/parental-leave"
 
 
-# --- dismissal --------------------------------------------------------------
+# --- dismissed --------------------------------------------------------------
 
 
-def test_a_dismissed_row_disappears_from_the_panel(records, tmp_path: Path):
-    curation = tmp_path / "curation.json"
-    dismiss(curation, "hr/office-plants", count=1)
+def test_a_dismissed_row_leaves_the_main_list(records, tmp_path: Path):
+    curation = tmp_path / "c.json"
+    curate(curation, "hr/office-plants", "dismissed", count=1)
 
-    keys = {r["key"] for r in aggregate(records, curation=read_curation(curation))["misses"]}
+    result = state_of(records, curation)
 
-    assert "hr/office-plants" not in keys
-    assert "hr/parental-leave" in keys
-
-
-def test_a_dismissed_row_is_still_listed_separately_with_its_current_count(records, tmp_path: Path):
-    """Dismiss something that keeps getting asked for and you should be able to see
-    you got it wrong."""
-    curation = tmp_path / "curation.json"
-    dismiss(curation, "hr/parental-leave", count=2)
-
-    result = aggregate(records, curation=read_curation(curation))
-
-    (row,) = result["dismissed"]
-    assert row["key"] == "hr/parental-leave"
-    assert row["count"] == 2
-
-
-def test_restoring_puts_a_row_back(records, tmp_path: Path):
-    curation = tmp_path / "curation.json"
-    dismiss(curation, "hr/office-plants", count=1)
-    restore(curation, "hr/office-plants")
-
-    keys = {r["key"] for r in aggregate(records, curation=read_curation(curation))["misses"]}
-
-    assert "hr/office-plants" in keys
-
-
-def test_dismissing_twice_is_harmless(tmp_path: Path):
-    curation = tmp_path / "curation.json"
-    dismiss(curation, "hr/x", count=1)
-    dismiss(curation, "hr/x", count=1)
-
-    assert [d["key"] for d in read_curation(curation)["dismissed"]] == ["hr/x"]
-
-
-# --- a dismissal is a judgement on the evidence so far, not a permanent mute ---
+    assert "hr/office-plants" not in {r["key"] for r in result["misses"]}
+    assert [(r["key"], r["state"]) for r in result["curated"]] == [
+        ("hr/office-plants", "dismissed")
+    ]
 
 
 def test_new_demand_after_a_dismissal_brings_the_row_back(records, tmp_path: Path):
-    """Dismissing means "not worth writing given what I have seen". Somebody asking
-    again is new information, and burying it makes the panel lie by omission."""
-    curation = tmp_path / "curation.json"
-    dismiss(curation, "hr/parental-leave", count=2)   # the count when it was dismissed
-
-    records.append(rec(event="context_gap", session="zzz",
-                       domain="hr", topic="parental-leave"))
-    result = aggregate(records, curation=read_curation(curation))
-
-    keys = {r["key"] for r in result["misses"]}
-    assert "hr/parental-leave" in keys
-    assert result["dismissed"] == []
-
-
-def test_a_row_that_came_back_says_so(records, tmp_path: Path):
-    curation = tmp_path / "curation.json"
-    dismiss(curation, "hr/parental-leave", count=2)
+    """Somebody asking again is new information, and burying it makes the panel lie
+    by omission."""
+    curation = tmp_path / "c.json"
+    curate(curation, "hr/parental-leave", "dismissed", count=2)
     records.append(rec(event="context_gap", session="zzz",
                        domain="hr", topic="parental-leave"))
 
-    row = next(r for r in aggregate(records, curation=read_curation(curation))["misses"]
+    row = next(r for r in state_of(records, curation)["misses"]
                if r["key"] == "hr/parental-leave")
 
     assert row["returned"] is True
+    assert row["was_state"] == "dismissed"
 
 
-def test_a_dismissal_holds_while_nothing_new_arrives(records, tmp_path: Path):
-    curation = tmp_path / "curation.json"
-    dismiss(curation, "hr/office-plants", count=1)
-
-    result = aggregate(records, curation=read_curation(curation))
-
-    assert "hr/office-plants" not in {r["key"] for r in result["misses"]}
-    assert [r["key"] for r in result["dismissed"]] == ["hr/office-plants"]
-
-
-def test_re_dismissing_a_returned_row_resets_the_baseline(records, tmp_path: Path):
-    curation = tmp_path / "curation.json"
-    dismiss(curation, "hr/parental-leave", count=2)
+def test_re_dismissing_raises_the_baseline(records, tmp_path: Path):
+    curation = tmp_path / "c.json"
+    curate(curation, "hr/parental-leave", "dismissed", count=2)
     records.append(rec(event="context_gap", session="zzz",
                        domain="hr", topic="parental-leave"))
-    dismiss(curation, "hr/parental-leave", count=3)   # seen it, still not writing it
+    curate(curation, "hr/parental-leave", "dismissed", count=3)
 
-    result = aggregate(records, curation=read_curation(curation))
+    assert "hr/parental-leave" not in {r["key"] for r in state_of(records, curation)["misses"]}
+
+
+# --- resolved ---------------------------------------------------------------
+
+
+def test_a_resolved_row_leaves_the_main_list(records, tmp_path: Path):
+    curation = tmp_path / "c.json"
+    curate(curation, "hr/parental-leave", "resolved", count=2)
+
+    result = state_of(records, curation)
 
     assert "hr/parental-leave" not in {r["key"] for r in result["misses"]}
+    assert result["curated"][0]["state"] == "resolved"
 
 
-def test_a_legacy_plain_string_dismissal_still_reads(tmp_path: Path):
-    """The first version stored bare keys with no baseline."""
-    curation = tmp_path / "curation.json"
-    curation.write_text(json.dumps({"dismissed": ["hr/x"]}), encoding="utf-8")
+def test_something_still_missed_after_being_resolved_comes_back(records, tmp_path: Path):
+    """You wrote it and people are still missing it, so it is not reachable. That is
+    a different and more urgent problem than an unwritten document."""
+    curation = tmp_path / "c.json"
+    curate(curation, "hr/parental-leave", "resolved", count=2)
+    records.append(rec(event="context_gap", session="zzz",
+                       domain="hr", topic="parental-leave"))
 
-    (entry,) = read_curation(curation)["dismissed"]
+    row = next(r for r in state_of(records, curation)["misses"]
+               if r["key"] == "hr/parental-leave")
 
-    assert entry["key"] == "hr/x"
-    assert entry["count"] == 0   # unknown baseline: show it again rather than hide it
-
-
-def test_restoring_something_never_dismissed_is_harmless(tmp_path: Path):
-    curation = tmp_path / "curation.json"
-    restore(curation, "hr/never")
-
-    assert read_curation(curation)["dismissed"] == []
+    assert row["returned"] is True
+    assert row["was_state"] == "resolved"
 
 
-def test_a_missing_or_corrupt_curation_file_reads_as_nothing_dismissed(tmp_path: Path):
-    assert read_curation(tmp_path / "nope.json")["dismissed"] == []
+def test_a_row_says_whether_the_artifact_now_exists(records, tmp_path: Path):
+    """Marking something resolved is a claim; the catalog is the evidence."""
+    records.append({"ts": "2026-08-31T09:00:00.000Z", "event": "catalog",
+                    "artifacts": {"hr/expense-policy": "v1", "hr/parental-leave": "v2"}})
+
+    rows = {r["key"]: r for r in aggregate(records)["misses"]}
+
+    assert rows["hr/parental-leave"]["exists_now"] is True
+    assert rows["hr/office-plants"]["exists_now"] is False
+
+
+# --- deleted ----------------------------------------------------------------
+
+
+def test_a_deleted_row_never_returns_however_much_demand_arrives(records, tmp_path: Path):
+    curation = tmp_path / "c.json"
+    curate(curation, "hr/office-plants", "deleted", count=1)
+    for n in range(5):
+        records.append(rec(event="context_gap", session=f"s{n}",
+                           domain="hr", topic="office-plants"))
+
+    result = state_of(records, curation)
+
+    assert "hr/office-plants" not in {r["key"] for r in result["misses"]}
+    assert result["curated"][0]["state"] == "deleted"
+
+
+def test_a_deleted_row_is_still_restorable(records, tmp_path: Path):
+    """Confirmation guards the click; restore guards the regret."""
+    curation = tmp_path / "c.json"
+    curate(curation, "hr/office-plants", "deleted", count=1)
+    curate(curation, "hr/office-plants", "active")
+
+    assert "hr/office-plants" in {r["key"] for r in state_of(records, curation)["misses"]}
+
+
+# --- the file ---------------------------------------------------------------
+
+
+def test_curating_the_same_key_twice_replaces_rather_than_duplicates(tmp_path: Path):
+    curation = tmp_path / "c.json"
+    curate(curation, "hr/x", "dismissed", count=1)
+    curate(curation, "hr/x", "resolved", count=1)
+
+    entries = read_curation(curation)["entries"]
+    assert len(entries) == 1
+    assert entries[0]["state"] == "resolved"
+
+
+def test_setting_active_removes_the_entry_entirely(tmp_path: Path):
+    curation = tmp_path / "c.json"
+    curate(curation, "hr/x", "deleted", count=1)
+    curate(curation, "hr/x", "active")
+
+    assert read_curation(curation)["entries"] == []
+
+
+def test_an_unknown_state_is_refused_rather_than_written(tmp_path: Path):
+    curation = tmp_path / "c.json"
+
+    with pytest.raises(ValueError):
+        curate(curation, "hr/x", "banished", count=1)
+
+    assert read_curation(curation)["entries"] == []
+
+
+def test_a_legacy_dismissed_list_still_reads(tmp_path: Path):
+    """Two earlier shapes: bare keys, then {key,count,at} under a `dismissed` key."""
+    curation = tmp_path / "c.json"
+    curation.write_text(json.dumps({"dismissed": [
+        "hr/bare",
+        {"key": "hr/withcount", "count": 3, "at": "2026-08-31T09:00:00.000Z"},
+    ]}), encoding="utf-8")
+
+    entries = {e["key"]: e for e in read_curation(curation)["entries"]}
+
+    assert entries["hr/bare"]["state"] == "dismissed"
+    assert entries["hr/bare"]["count"] == 0     # unknown baseline: show it again
+    assert entries["hr/withcount"]["count"] == 3
+
+
+def test_a_missing_or_corrupt_curation_file_reads_as_nothing_curated(tmp_path: Path):
+    assert read_curation(tmp_path / "nope.json")["entries"] == []
 
     broken = tmp_path / "broken.json"
     broken.write_text("{not json", encoding="utf-8")
-    assert read_curation(broken)["dismissed"] == []
+    assert read_curation(broken)["entries"] == []
 
 
-def test_dismissal_does_not_touch_the_usage_log(records, tmp_path: Path):
-    """Curation is a decision, not an observation. The log stays append-only telemetry."""
-    curation = tmp_path / "curation.json"
+def test_curation_does_not_touch_the_usage_log(records, tmp_path: Path):
+    """Curation is a decision, not an observation. The log stays append-only."""
     before = json.dumps(records)
 
-    dismiss(curation, "hr/office-plants", count=1)
+    curate(tmp_path / "c.json", "hr/office-plants", "deleted", count=1)
 
     assert json.dumps(records) == before

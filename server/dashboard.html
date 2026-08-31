@@ -97,7 +97,9 @@
     <h2>What to write next</h2>
     <p class="note">Wanted and not there, ranked by demand. <b>reported</b> means an agent read the manifest,
        found no answer and said so; <b>guessed</b> means it asked for an id that does not exist.
-       Dismiss anything not worth writing. A dismissal is a judgement on the demand so far, so if it is asked for again the row comes back.</p>
+       <b>resolved</b> once written, <b>dismiss</b> for not now, <b>delete</b> for never.
+       Dismissed and resolved rows come back if demand grows; a resolved one coming back means the
+       artifact exists but is not reachable. Deleted rows stay gone.</p>
     <div id="misses"></div>
   </section>
 
@@ -236,7 +238,25 @@ const sourceTag = s => s === "reported"
   ? '<span class="tag">&#9998; reported</span>'
   : '<span class="tag">&#63; guessed</span>';
 
-function missRow(r, max, dismissed) {
+const STATE_LABEL = { dismissed: "dismissed", resolved: "resolved", deleted: "deleted" };
+
+function returnedTag(r) {
+  /* `resolved` coming back is the urgent one: the document exists and people are
+     still missing it, so it is not reachable. Say which it was. */
+  const what = r.was_state === "resolved"
+    ? `still missed after you marked it resolved (was ${r.marked_at_count})`
+    : `asked again since you dismissed it (was ${r.marked_at_count})`;
+  const colour = r.was_state === "resolved" ? "var(--crit)" : "var(--seq)";
+  return `<span class="tag" style="border-color:${colour};color:${colour}">&#8635; ${what}</span>`;
+}
+
+function missRow(r, max, curated) {
+  const actions = curated
+    ? `<button class="mini" data-state="active" data-key="${esc(r.key)}">restore</button>`
+    : `<button class="mini" data-state="resolved" data-key="${esc(r.key)}">resolved</button>
+       <button class="mini" data-state="dismissed" data-key="${esc(r.key)}">dismiss</button>
+       <button class="mini" data-state="deleted" data-confirm="1"
+               data-key="${esc(r.key)}">delete</button>`;
   return `<tr>
     <td class="id">${esc(r.key)}
       <div style="height:4px;margin-top:4px;border-radius:2px;background:var(--seq);width:${(r.count/max*100).toFixed(0)}%"></div>
@@ -245,16 +265,17 @@ function missRow(r, max, dismissed) {
     <td class="n">${r.sessions || "–"}</td>
     <td>${esc(ago(r.last))}</td>
     <td>${(r.sources || []).map(sourceTag).join(" ")}
-        ${r.ever_existed ? '<span class="tag">&#9888;&#65039; existed, now gone</span>' : ""}
-        ${r.returned ? `<span class="tag" style="border-color:var(--seq);color:var(--seq)">&#8635; asked again since you dismissed it (was ${r.dismissed_at_count})</span>` : ""}</td>
-    <td class="n"><button class="mini" data-act="${dismissed ? "restore" : "dismiss"}"
-        data-key="${esc(r.key)}">${dismissed ? "restore" : "dismiss"}</button></td>
+        ${r.exists_now ? '<span class="tag" style="border-color:var(--good);color:var(--good)">&#10003; now written</span>' : ""}
+        ${r.ever_existed && !r.exists_now ? '<span class="tag">&#9888;&#65039; existed, now gone</span>' : ""}
+        ${r.returned ? returnedTag(r) : ""}
+        ${curated ? `<span class="tag">${STATE_LABEL[r.state] || esc(r.state)}</span>` : ""}</td>
+    <td class="n" style="white-space:nowrap">${actions}</td>
   </tr>`;
 }
 
-function misses(rows, dismissedRows) {
+function misses(rows, curatedRows) {
   const host = $("misses");
-  const all = rows.concat(dismissedRows);
+  const all = rows.concat(curatedRows);
   if (!all.length) {
     return empty(host, "Nothing wanted and missing yet. Either the corpus covers what people ask for, or nobody has asked.");
   }
@@ -263,27 +284,32 @@ function misses(rows, dismissedRows) {
     <tr><th>Artifact</th><th class="n">Asked</th><th class="n">Sessions</th><th>Last</th>
         <th>How</th><th></th></tr>
     ${rows.map(r => missRow(r, max, false)).join("")}</table></div>`
-    : `<p class="empty">Everything suggested so far has been dismissed.</p>`) +
-    (dismissedRows.length ? `
+    : `<p class="empty">Everything suggested so far has been dealt with.</p>`) +
+    (curatedRows.length ? `
       <details id="dismissedBox" style="margin-top:12px"${dismissedOpen ? " open" : ""}>
         <summary style="cursor:pointer;font-size:12px;color:var(--ink-3)">
-          Dismissed (${dismissedRows.length}) &mdash; they come back on their own if demand grows
+          Handled (${curatedRows.length}) &mdash; dismissed and resolved come back if demand grows; deleted does not
         </summary>
         <div class="scroll" style="margin-top:8px;opacity:.72"><table>
-          ${dismissedRows.map(r => missRow(r, max, true)).join("")}
+          ${curatedRows.map(r => missRow(r, max, true)).join("")}
         </table></div>
       </details>` : "");
 
   const box = $("dismissedBox");
   if (box) box.ontoggle = () => { dismissedOpen = box.open; };
 
-  host.querySelectorAll("button[data-act]").forEach(b => {
+  host.querySelectorAll("button[data-state]").forEach(b => {
     b.onclick = async () => {
+      /* Delete is the one that does not come back on its own, so it asks first. */
+      if (b.dataset.confirm && !confirm(
+            `Delete the suggestion "${b.dataset.key}"?\n\n` +
+            `It will stay hidden however many times it is asked for again. ` +
+            `Dismiss instead if you only mean "not now".`)) return;
       b.disabled = true;
-      await fetch("/" + b.dataset.act, {
+      await fetch("/curate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: b.dataset.key }),
+        body: JSON.stringify({ key: b.dataset.key, state: b.dataset.state }),
       });
       load();
     };
@@ -440,7 +466,7 @@ function scatter(points) {
 /* --- wiring ------------------------------------------------------------------ */
 function render(d) {
   DATA = d;
-  kpis(d.kpi); misses(d.misses, d.dismissed || []); hbars($("served"), d.served, {
+  kpis(d.kpi); misses(d.misses, d.curated || []); hbars($("served"), d.served, {
     label: r => r.key, value: r => r.count,
     caption: r => `${r.key} — ${r.count} fetches, ${bytes(r.bytes)}, last ${ago(r.last)}`,
   });
