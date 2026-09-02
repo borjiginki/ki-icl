@@ -16,9 +16,8 @@ help:
 	@echo "  dashboard   serve the usage dashboard on :8010, reading the log live"
 
 install:
-	python3 -m venv .venv
-	$(PY) -m pip install -q --upgrade pip
-	$(PY) -m pip install -q -r requirements-dev.txt
+	uv venv .venv --allow-existing
+	uv pip install -q -r requirements-dev.txt
 
 validate:
 	$(PY) scripts/validate_context.py
