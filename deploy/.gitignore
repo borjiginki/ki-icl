@@ -1,0 +1,17 @@
+# Provider binaries and plugin cache.
+.terraform/
+.terraform.lock.hcl
+
+# State holds resource ids and whatever a future resource decides to record. It is
+# local for a sandbox, which is fine for one person and wrong for two; if a second
+# person ever runs this, move it to a storage account backend first.
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+
+# Real values, including a subscription id somebody may not want in git.
+terraform.tfvars
+*.auto.tfvars
+
+# Saved plans can contain variable values.
+*.tfplan

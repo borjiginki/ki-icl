@@ -1,0 +1,25 @@
+# Copy to terraform.tfvars and edit. Every value below is already the default, so an
+# empty tfvars file is a valid first apply; this exists to show what the knobs are.
+
+# The sandbox. Named explicitly rather than taken from the CLI default, which is the
+# AI PLATFORM subscription: a mistake there would be a production mistake.
+subscription_id     = "744a1376-67fc-40a3-acd7-1cf437f7c02a"
+resource_group_name = "hurile-playground"
+location            = "germanywestcentral"
+
+# Empty runs Microsoft's quickstart, so the first apply proves the infrastructure with
+# the application not involved. Then: az acr build, and pin the sha here.
+# image = "kiiclacrxxxxxx.azurecr.io/ki-icl:abc1234"
+
+# `off` is honest on internal ingress and nowhere else. `entra` needs stage 4.
+auth_mode      = "off"
+enforce_grants = true
+
+# False until the Key Vault secret exists, because a secret reference that cannot
+# resolve stops the revision starting.
+audit_key_enabled = false
+
+# entra = {
+#   tenant_id = "cbd1a264-94b1-4d60-b0f6-ca149e7aef80"
+#   client_id = "<from whoever registered the app>"
+# }

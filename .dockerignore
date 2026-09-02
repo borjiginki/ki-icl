@@ -1,0 +1,13 @@
+# .git is deliberately NOT ignored: the packager stamps every artifact with the last
+# commit that touched its folder, and without history every artifact would carry the
+# same fallback stamp.
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+dist/
+logs/
+deploy/.terraform/
+deploy/*.tfstate
+deploy/*.tfstate.*
+deploy/terraform.tfvars

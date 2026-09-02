@@ -407,13 +407,26 @@ Engineering does not block on these, but production does.
 - **Not an Annex III high-risk AI system**, and the reason is worth keeping: no automated decision about a person, no profile, no ranking or score. Any future feature that ranks, scores or compares people changes that classification.
 - `KI_ICL_AUDIT_KEY` is a secret. Key Vault or a container-app secret, never this repo and never `~/.claude.json`, which is a plaintext home-directory file that gets backed up and synced.
 
+## Deploying
+
+[deploy/](deploy/) holds Terraform for Azure Container Apps, and [deploy/README.md](deploy/README.md) is the runbook.
+Target is the KI-PER Data Platform Sandbox, resource group `hurile-playground`, Germany West Central.
+
+The shape, and the two things worth knowing before reading the rest:
+
+- **Ingress is internal.** The environment gets a private IP, so only a VNet linked to its private DNS zone can reach it. That is what makes running with `KI_ICL_AUTH=off` defensible at first: the network is the control. It also means claude.ai and Claude Desktop cannot reach it, only Claude Code from inside that network.
+- **The corpus is baked into the image**, validated by the same gate CI runs, so the image tag answers "which corpus was served on Tuesday". A content edit means a rebuild and a new revision. That is the cost of the audit trail, paid deliberately.
+
+Four stages, each of which leaves something working: infrastructure with a placeholder image, then the real image with grants observed rather than enforced, then the audit key, then Entra.
+The third and fourth are where personal data starts being processed, and the runbook says so at the point where it happens.
+
 ## What this POC leaves out
 
 Everything here is deliberate, and each item is cheap to add once it is wanted.
 
 | Not built | Why, and what it costs |
 |---|---|
-| Azure blob fetch, ETag guard, cache swap | Parametrizing `ki-mcp/server/utils/skills_source.py`, which already works in production. Nothing new to design. |
+| Azure blob fetch, ETag guard, cache swap | Parametrizing `ki-mcp/server/utils/skills_source.py`, which already works in production. Nothing new to design, but now it has a hard constraint: the cache must hold **raw** manifests, because a cached filtered one served to a second caller is a cross-principal disclosure. The deployment sidesteps this entirely by baking the corpus into the image, so a content change is a new revision rather than a cache invalidation. |
 | `publish-context.yml` (upload + `/refresh`) | Blocked on a federated credential for this repo on the publisher Entra app. Copy `ki-dev-skills/.github/workflows/publish-skills.yml` and change four things. |
 | Registration in ki-mcp | Move `server/artifacts.py` to `ki-mcp/server/utils/artifacts.py` and the three tool functions to `server/tools/artifact_tools.py`. |
 | Ownership, `CODEOWNERS`, approval routing | Deferred by decision. `owner` is already served as `null` at both levels, so adding it is data, not a schema change. The routing rule above is chosen to agree with it when it lands. |
