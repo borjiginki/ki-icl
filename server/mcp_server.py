@@ -366,11 +366,57 @@ def refuse_unsafe_start(*, http: bool, host: str) -> None:
                 "KI_ICL_AUDIT_REQUIRED=1 and no usable KI_ICL_AUDIT_KEY. Logging is a "
                 "declared control here, so refusing to start rather than serve unlogged."
             )
-        print(
-            "WARNING: no usable KI_ICL_AUDIT_KEY. No actor will be recorded, and the "
-            "audit trail will not answer who read what.",
-            file=sys.stderr,
+
+
+LOOPBACK = ("127.0.0.1", "::1", "localhost")
+
+
+def bind_address() -> tuple[str, int]:
+    """Where to listen. Loopback and 8000 unless told otherwise.
+
+    A container has to *ask* for a wider bind, by setting `KI_ICL_HOST=0.0.0.0`.
+    Defaulting the other way would mean a careless local `--http` run exposes the
+    corpus to whatever network the laptop is on, which is the kind of default that is
+    discovered by accident rather than by design.
+    """
+    host = os.environ.get("KI_ICL_HOST", "").strip() or "127.0.0.1"
+    raw_port = os.environ.get("KI_ICL_PORT", "").strip() or "8000"
+    try:
+        port = int(raw_port)
+    except ValueError:
+        raise SystemExit(f"KI_ICL_PORT must be a number, not {raw_port!r}.") from None
+    return host, port
+
+
+def startup_lines(*, host: str, port: int, http: bool, mode: access.Mode) -> list[str]:
+    """What the operator sees on stderr at boot.
+
+    A function rather than inline prints so the warnings can be tested. Each warning is
+    absent when it does not apply: a banner that always fires stops being read, which is
+    the same argument the review caveat rests on.
+    """
+    where = f"http://{host}:{port}/mcp" if http else "stdio"
+    lines = [
+        f"serving {artifacts.ARTIFACTS_ROOT} | {where} "
+        f"| auth={auth_mode() or 'none (stdio)'} | access={mode.value}"
+    ]
+    if mode is not access.Mode.ENFORCE:
+        lines.append(
+            "WARNING: access grants are OBSERVED, not enforced. Every denial is logged "
+            "with effect=observed and nothing is withheld."
         )
+    if http and auth_mode() == "off" and host not in LOOPBACK:
+        lines.append(
+            f"WARNING: serving UNAUTHENTICATED on {host}:{port}. Every caller that can "
+            f"reach this port reads the whole corpus. Only the surrounding network is "
+            f"stopping them, and this process cannot tell whether there is one."
+        )
+    if identity.audit_key_from_env() is None:
+        lines.append(
+            "NOTE: no usable KI_ICL_AUDIT_KEY, so no actor is recorded. The log will "
+            "say what was read, never by whom."
+        )
+    return lines
 
 
 mcp = build_server(auth=auth_from_env())
@@ -378,21 +424,18 @@ mcp = build_server(auth=auth_from_env())
 
 if __name__ == "__main__":
     http = "--http" in sys.argv
-    host = "127.0.0.1"
+    host, port = bind_address()
     refuse_unsafe_start(http=http, host=host)
 
     mode = identity.effective_mode()
-    print(
-        f"serving {artifacts.ARTIFACTS_ROOT} | auth={auth_mode() or 'stdio (none)'} "
-        f"| access={mode.value}",
-        file=sys.stderr,
-    )
-    if mode is not identity.Mode.ENFORCE:
-        print(
-            "WARNING: access grants are OBSERVED, not enforced. Denials are logged and "
-            "nothing is withheld.",
-            file=sys.stderr,
+    for line in startup_lines(host=host, port=port, http=http, mode=mode):
+        print(line, file=sys.stderr)
+
+    usage.USAGE_LOG.write(
+        usage.server_start_record(
+            auth_mode=auth_mode(), transport="http" if http else "stdio", mode=mode
         )
+    )
     # One snapshot of what exists, so the dashboard can tell a miss for something that
     # never existed from a miss for something that was deleted.
     usage.USAGE_LOG.write(usage.catalog_record(artifacts.ARTIFACTS_ROOT))
@@ -400,9 +443,10 @@ if __name__ == "__main__":
         mcp.run(
             transport="http",
             host=host,
-            port=8000,
-            # Off by default in FastMCP, which leaves a loopback server reachable from
-            # any web page through DNS rebinding.
+            port=port,
+            # FastMCP's "auto" engages only for a loopback bind, which is exactly right
+            # in both places: it blocks DNS rebinding against a local server, and steps
+            # aside behind an ingress whose hostname this process cannot know.
             host_origin_protection="auto",
         )
     else:

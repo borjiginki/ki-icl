@@ -366,3 +366,79 @@ def test_identity_does_not_import_the_composition_root():
 
     assert "server.mcp_server" not in source
     assert "from server import mcp_server" not in source
+
+
+# --- where it listens -------------------------------------------------------
+
+
+def test_the_bind_address_is_loopback_unless_asked_otherwise(monkeypatch):
+    """A container has to ask for a wider bind. Defaulting to 0.0.0.0 would mean a
+    careless local run exposes the corpus to the network."""
+    from server import mcp_server
+
+    monkeypatch.delenv("KI_ICL_HOST", raising=False)
+    monkeypatch.delenv("KI_ICL_PORT", raising=False)
+
+    assert mcp_server.bind_address() == ("127.0.0.1", 8000)
+
+
+def test_a_container_can_bind_all_interfaces(monkeypatch):
+    """Container Apps routes to the container's own address, so it must listen on
+    0.0.0.0. The network boundary there is the internal ingress, not the bind."""
+    from server import mcp_server
+
+    monkeypatch.setenv("KI_ICL_HOST", "0.0.0.0")
+    monkeypatch.setenv("KI_ICL_PORT", "8080")
+
+    assert mcp_server.bind_address() == ("0.0.0.0", 8080)
+
+
+def test_a_port_that_is_not_a_number_is_refused_rather_than_defaulted(monkeypatch):
+    from server import mcp_server
+
+    monkeypatch.setenv("KI_ICL_PORT", "eight-thousand")
+
+    with pytest.raises(SystemExit, match="KI_ICL_PORT"):
+        mcp_server.bind_address()
+
+
+def test_demo_identities_still_refuse_a_wide_bind(served, monkeypatch):
+    """The guard that matters once the bind is configurable: fake identities must never
+    be reachable by anything but this machine."""
+    from server import mcp_server
+
+    monkeypatch.setenv("KI_ICL_AUTH", "demo")
+
+    with pytest.raises(SystemExit, match="loopback"):
+        mcp_server.refuse_unsafe_start(http=True, host="0.0.0.0")
+
+
+def test_serving_unauthenticated_off_loopback_is_announced_loudly(monkeypatch):
+    """`off` is a deliberate declaration, and on a wide bind it means the corpus is
+    readable by anything that can reach the port. The banner has to say so, because the
+    server cannot know whether a VNet is the boundary."""
+    from server import access, mcp_server
+
+    monkeypatch.setenv("KI_ICL_AUTH", "off")
+
+    lines = mcp_server.startup_lines(
+        host="0.0.0.0", port=8000, http=True, mode=access.Mode.OBSERVE
+    )
+    text = " ".join(lines)
+
+    assert "UNAUTHENTICATED" in text
+    assert "0.0.0.0" in text
+
+
+def test_a_loopback_run_is_not_shouted_at(monkeypatch):
+    """The warning has to be absent when it does not apply, or it becomes noise and
+    stops being read. Same argument as the review caveat."""
+    from server import access, mcp_server
+
+    monkeypatch.setenv("KI_ICL_AUTH", "off")
+
+    lines = mcp_server.startup_lines(
+        host="127.0.0.1", port=8000, http=True, mode=access.Mode.OBSERVE
+    )
+
+    assert "UNAUTHENTICATED" not in " ".join(lines)

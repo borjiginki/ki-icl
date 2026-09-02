@@ -109,9 +109,14 @@ async def test_the_script_runs_as_a_subprocess_the_way_a_stdio_client_launches_i
 
     assert {"list_domains", "get_domain_manifest", "get_artifact", "report_gap"} <= names
     assert json.loads(result.content[0].text)["domains"][0]["id"] == "company"
-    # First line is the startup catalog snapshot; the call follows it.
+    # `server_start` comes first, then the catalog snapshot, then the call. That order
+    # matters: the start record is what explains every later record's absences (which
+    # auth mode, whether grants were enforced, whether an audit key was configured), so
+    # it has to precede anything it would explain.
     lines = [json.loads(line) for line in usage_log.read_text().strip().splitlines()]
-    assert lines[0]["event"] == "catalog"
+    assert [line["event"] for line in lines[:2]] == ["server_start", "catalog"]
+    assert lines[0]["transport"] == "stdio"
+    assert lines[0]["enforced"] is False  # no identity over stdio, so nothing to enforce
     assert lines[-1]["tool"] == "list_domains"
 
 
