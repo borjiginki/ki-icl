@@ -184,7 +184,8 @@ async def test_a_real_call_through_the_server_lands_in_the_log(usage_file: Path)
         "get_artifact", {"domain": "company", "ids": ["expense-policy", "travel-policy"]}
     )
 
-    records = [json.loads(line) for line in usage_file.read_text().strip().splitlines()]
+    every = [json.loads(line) for line in usage_file.read_text().strip().splitlines()]
+    records = [r for r in every if r.get("event") == "context_use"]
     assert [(r["id"], r["outcome"]) for r in records] == [
         ("expense-policy", "found"),
         ("travel-policy", "not_found"),
@@ -199,5 +200,6 @@ async def test_logging_is_wired_by_middleware_so_no_tool_knows_about_it(usage_fi
     await mcp.call_tool("list_domains", {})
     await mcp.call_tool("get_domain_manifest", {"domain": "company"})
 
-    tools = [json.loads(line)["tool"] for line in usage_file.read_text().strip().splitlines()]
+    records = [json.loads(line) for line in usage_file.read_text().strip().splitlines()]
+    tools = [r["tool"] for r in records if r.get("event") == "context_use"]
     assert tools == ["list_domains", "get_domain_manifest"]

@@ -1,0 +1,87 @@
+# Who may read what, through the MCP read path.
+#
+# Keyed on Entra **app role** values, never on group object ids. Groups arrive as
+# GUIDs, which would make this file a table of opaque identifiers nobody can review,
+# and above 200 groups Entra replaces the claim with a Graph lookup that would need a
+# server-held secret and would send the caller's object id to Graph on every read. App
+# roles are admin-assigned in Enterprise Applications, so the assignment list is itself
+# the ISO 27001 A.5.18 access-rights review artefact: reviewable by somebody who does
+# not read Python.
+#
+# Two axes. The **domain keys are compartments**: a role reads a domain or it does not.
+# The **level is sensitivity**, compared only within a domain, against the `sensitivity`
+# each artifact declares. A caller's level for a domain is the maximum across their
+# roles, so gaining a role never takes access away.
+#
+# There is deliberately no wildcard and no global top level. Both are absences that
+# earn their place:
+#
+#   * A wildcard would save one line at eight domains and would make a newly added
+#     domain instantly readable by everyone holding it, defeating the gate rule below.
+#   * With no global top, "HR reads personnel material and leadership does not" is
+#     expressible. Nobody but ctx.people reaches `hr: confidential`, and
+#     test_a_broad_role_does_not_reach_personnel_material fails if that changes.
+#
+# `make validate` fails unless the domain keys across this file are exactly
+# KNOWN_DOMAINS. So a new domain is not merely invisible until somebody decides who
+# reads it, it is undeployable, which matches the "a decision, not a convention" rule
+# the domain partition already lives by.
+#
+# INVARIANT, and nothing in the code can enforce it: the eight domain **names** are
+# disclosed to any authenticated caller, because a denied domain answers `forbidden`
+# rather than pretending not to exist. They are KI group's business functions, not
+# secrets. Their contents are not. A domain whose *name* cannot be disclosed does not
+# belong in this partition at all.
+#
+# Who holds which role is an access-rights decision and needs a named owner. It is
+# data, so it changes here in a pull request without touching code.
+version: 1
+
+roles:
+  ctx.colleague:
+    description: >-
+      Any authenticated KI group colleague. Everyone holds this, which is why every
+      domain appears here, and why it appears at `internal` and no higher.
+    grants:
+      company: internal
+      finance: internal
+      hr: internal
+      marketing: internal
+      projects: internal
+      sales: internal
+      value-creation: internal
+      value-delivery: internal
+
+  ctx.delivery:
+    description: >-
+      Delivery leads and anyone staffed on an engagement. Reaches customer names,
+      project health and slipped commitments.
+    grants:
+      projects: restricted
+      value-creation: restricted
+      value-delivery: restricted
+
+  ctx.sales:
+    description: >-
+      Sales. Offer and rate material, plus project state to quote against: a proposal
+      written without knowing an engagement is at risk is the failure this grant
+      prevents.
+    grants:
+      sales: restricted
+      projects: restricted
+
+  ctx.finance:
+    description: The finance team. Rates, margins and anything that prices work.
+    grants:
+      finance: restricted
+
+  ctx.people:
+    description: >-
+      HR and the works-council contact. The only role that reaches `confidential`
+      personnel material, and deliberately NOT held by leadership. A record that lets
+      an employer assess an individual is personal data with a works council dimension
+      under the BDSG; see domains/value-creation/project-status-reporting/README.md,
+      which refuses to create one as a side effect of status reporting. Widening this
+      role is that same decision, made deliberately.
+    grants:
+      hr: confidential

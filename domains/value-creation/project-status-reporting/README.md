@@ -111,8 +111,8 @@ The weaker reason: nobody asking these questions wants it.
 
 ## Before real project data lands here
 
-Two things are unresolved, and both belong to whoever owns this domain rather than to this document.
+Two things need care, and both belong to whoever owns this domain rather than to this document.
 
-**Access is broad by construction.** Every caller who can reach the MCP sees every domain; per-identity scoping is deferred to a separate issue. Customer names, scope, rates and slipped commitments in this domain are readable by anyone with access to the server. For real engagements that has to be checked against the NDA or AVV in force before the content is written, not after.
+**Access is scoped, but the repository is not.** Every artifact here is labelled `sensitivity: restricted`, so only the roles granted `projects` at that level read it through the MCP. That closes the case this domain was worried about: a colleague's agent browsing broadly no longer pulls a customer name and a slipped commitment into a context window. It does **not** make this content confidential. These files live in a git repository, and anyone who can clone it reads them whatever the label says. So the NDA or AVV in force still has to be checked before real engagement content is written here, not after, and anything that genuinely cannot be read by everyone with repository access belongs in a separate repository rather than behind a label.
 
 **Freshness is unenforced.** Nothing currently fails when a `status.md` goes stale. The as-of date makes staleness visible to a reader, and now also computable from the domain listing without opening anything, so a stale project can be found in one call. What is still missing is anyone being told: nothing pushes, and a status nobody asks about can rot quietly. That belongs with the update mechanism rather than with the validation gate, which cannot know what "too old" means for a given project.

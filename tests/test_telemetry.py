@@ -126,10 +126,17 @@ def logged(tmp_path: Path, monkeypatch, catalog: Path):
     monkeypatch.setattr(artifacts, "ARTIFACTS_ROOT", catalog)
     monkeypatch.setattr(usage, "USAGE_LOG", usage.UsageLog(path=path, stream=None))
 
-    def read() -> list[dict]:
+    def read(event: str = "context_use") -> list[dict]:
+        """Records of one event type, `context_use` by default.
+
+        Filtered rather than returning everything, because the log now carries
+        `access_session` and `access_denied` too, and a test asserting on "the records"
+        should say which records it means rather than break whenever a new event lands.
+        """
         if not path.is_file():
             return []
-        return [json.loads(line) for line in path.read_text().strip().splitlines()]
+        records = [json.loads(line) for line in path.read_text().strip().splitlines()]
+        return [r for r in records if r.get("event") == event]
 
     return read
 
@@ -211,6 +218,15 @@ async def test_a_tool_that_raises_is_recorded_and_the_error_still_propagates(log
     (record,) = logged()
     assert record["outcome"] == "error"
     assert record["tool"] == "list_domains"
-    # FastMCP wraps a tool's exception in ToolError, so the outer type name is that.
-    # What has to survive is the message, which is the diagnosable part.
-    assert "blob unreachable" in record["error"]
+    # The record says a call failed and which one; it deliberately does NOT carry the
+    # exception's message. `mask_error_details=True` replaces the detail with a generic
+    # ToolError before the middleware ever sees it, and that is the point: FastMCP
+    # returns exception text to the client verbatim otherwise, so a traceback naming an
+    # artifact id would disclose exactly what authorization exists to withhold.
+    #
+    # The diagnosis is not lost, it moves: FastMCP's own logger writes the full
+    # traceback to stderr, which is the stream production collects and is the same
+    # stream these records go to. So the operator still gets "blob unreachable" and the
+    # caller still gets nothing.
+    assert record["error"].startswith("ToolError")
+    assert "blob unreachable" not in record["error"]

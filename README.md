@@ -126,7 +126,8 @@ Note the fetch granularity.
 A project folder with six files returns all six every time, which is the reason to keep each one tight.
 
 The conventions, the stage and health vocabularies, and what an update is meant to cost are in [project-status-reporting](domains/value-creation/project-status-reporting/README.md).
-Two things there are unresolved and matter before real project data lands: read access is broad by construction, so customer names and slipped commitments would be readable by anyone reaching the server, and nothing yet fails when a status goes stale.
+One thing there is still unresolved and matters before real project data lands: nothing yet fails when a status goes stale.
+Read access is no longer broad, but note what that does and does not buy, in [access control](#access-control): the MCP read path is scoped to the caller, while the repository these files live in is not.
 
 Domain ids are close to permanent.
 `version_id` comes from the last commit touching `domains/<domain>/<artifact>/`, so renaming a domain restamps every artifact inside it at once.
@@ -288,7 +289,7 @@ An id that is asked for repeatedly and never found is a document somebody needs 
 Two properties worth keeping:
 
 - **No tool knows about it.** It is FastMCP middleware, so adding a tool needs no logging code and no allowlist entry, and logging cannot fall out of step with the tool list. A logging failure is swallowed: it must stay an annoyance, never an outage.
-- **No caller identity is recorded.** The log says what was looked up, never who looked it up, so no personal data is processed and no Art. 6 GDPR basis is needed. If that ever has to change, port `ki-mcp`'s `utils/observability._caller()` rather than writing a second one: it emits a keyed digest gated on a configured salt, and never an email or a raw object id. Note that a pseudonym is still personal data under GDPR, so that step needs a documented basis.
+- **The caller is recorded as a keyed pseudonym.** `actor` is `HMAC(key, oid)` truncated to 12 hex characters, minted in [server/identity.py](server/identity.py), which is the only module that ever holds a raw Entra object id. With no key configured the field is absent rather than null, so a stretch of log without one cannot be mistaken for a person, and neither authentication nor authorization depends on the key. A pseudonym is still personal data: the Art. 6 basis, the 90-day retention and the works council position are in [access control](#access-control) below. What is still never recorded: a name, an email, a UPN, an IP, the raw object id, or the user's question.
 
 Sinks are stderr plus `logs/usage.jsonl`. Set `CONTEXT_USAGE_LOG=""` to leave stderr as the only one, which is what production wants: stdout is already collected by Log Analytics and a file would be a second store to own.
 
@@ -320,8 +321,23 @@ Three decisions in there worth not undoing:
 make inspector
 ```
 
-Starts the server and opens MCP Inspector against [mcp-inspector.json](mcp-inspector.json), which lists this repo's two entries and nothing else.
-Both serve the same three tools; `ki-icl-http` is the one `make inspector` starts.
+Starts the server and opens MCP Inspector against [mcp-inspector.json](mcp-inspector.json), which lists this repo's entries and nothing else.
+All of them serve the same four tools; `ki-icl-http` is the one `make inspector` starts, and it is unauthenticated.
+
+To see access control working, pick an identity rather than a transport:
+
+```bash
+make serve-http-demo          # then use ki-icl-http-demo, or swap the token in the header
+make serve-as                 # stdio, enforcing, as the `baseline` identity
+make serve-as DEV_PRINCIPAL=broad
+```
+
+`ki-icl-http-demo` carries `Authorization: Bearer demo-token-baseline`.
+Change the id in that header to any row in [config/demo_principals.yaml](config/demo_principals.yaml) to see the same corpus through different eyes: `broad` reads the projects, `baseline` sees the domain and neither project in it, `no-grants` sees nothing at all.
+
+Note what `make serve-http` and plain `make serve` do **not** do: with no authentication configured there is no identity to key authorization on, so grants are observed rather than applied and nothing is withheld.
+Every would-be denial is still logged with `effect: observed`, and `make usage` puts them in their own table, so the dry run is real even though the door is open.
+That is why enforcement locally needs `serve-as`: it supplies an identity, and therefore something to enforce against.
 
 Inspector's default ports collide with any other Inspector already running, and it fails rather than falling back, so override them:
 
@@ -342,6 +358,54 @@ To run the server alone, `make serve-http`, then point a client at `http://127.0
   }
 }
 ```
+
+## Access control
+
+Reads are scoped to the caller's identity, taken from an Entra-issued JWT.
+Two axes, and they are not interchangeable:
+
+- **Domains are compartments.** A role reads a domain or it does not. Grants live in [access-policy.yaml](access-policy.yaml), keyed on Entra **app role** values rather than group object ids, so the file reads as English in a pull request and no IdP identifier ships with the corpus.
+- **`sensitivity` is a ladder**, compared only within a domain. Every artifact declares one of `internal`, `restricted` or `confidential`, required and gated the same way `review` is. A principal's level for a domain is the maximum across their roles, so gaining a role never removes access.
+
+There is deliberately no wildcard and no global top level.
+That is what makes "HR reads personnel material and leadership does not" expressible, and it is what makes a new domain fail `make validate` until the pull request adding it also decides who reads it.
+
+A denied domain returns an honest `forbidden`, because the eight domain **names** are KI group's business functions and are disclosed to any authenticated caller by design.
+A denied artifact is silently absent, because artifact ids are customer names.
+A domain with every row filtered is byte-identical to an empty one, or the difference would be an enumeration oracle.
+
+### What this defends, and what it does not
+
+**This layer defends the MCP read path. It does not defend the content.**
+
+This repository is a git repository. Everything labelled `restricted` stays readable by anyone who can clone it, and `version_id` in a payload is a commit SHA pointing straight at it.
+`sensitivity: confidential` is an ISO 27001 A.5.12 classification and a read-path control, not an access control for personal data.
+Content that genuinely needs one needs repository separation.
+
+The failure mode it does fix is specific and real: an agent doing broad discovery for one colleague pulls a customer name and `health: at risk` into a context window, and from there into a summary, an email, or a model provider's logs.
+
+### Transports
+
+`--http` is the only transport that can be authenticated.
+Over stdio the client spawns the process, owns its stdin, and runs it as the invoking user, so a bearer token would prove nothing that OS process ownership does not already decide.
+`KI_ICL_AUTH` selects `entra`, `demo` or `off`, and `--http` refuses to start without one of them, so a forgotten variable is a server that does not come up rather than one that serves HR content to anyone who can reach the port.
+
+The server is a pure OAuth **resource server**: `RemoteAuthProvider` over `JWTVerifier`, holding a public JWKS URL and no secret of any kind.
+Claude authenticates against Entra; this server only ever verifies the result.
+
+`config/demo_principals.yaml` holds fake principals for local testing, gated on `environment: local`, a `demo-token-` prefix on every token, `KI_ICL_AUTH=demo`, and a loopback bind.
+Because `StaticTokenVerifier` passes its claims through unchanged, the demo tokens exercise the same `claims -> Principal` code as a real Entra token rather than a mock.
+
+### Before this runs in production
+
+Engineering does not block on these, but production does.
+
+- **Art. 6(1)(f)** legitimate interests, with a written balancing test. Consent is not available in an employment relationship. German employee data is additionally governed by §26 BDSG and Art. 88 GDPR, and the DPO confirms the provision and its numbering rather than this file.
+- **§87(1) no. 6 BetrVG co-determination.** A per-person read log over `hr` and `finance` content is objectively *suitable for* monitoring employee behaviour, and suitability is assessed regardless of intent. Betriebsrat consultation, in practice a Betriebsvereinbarung, comes before the log has data in it. [team.md](domains/projects/dhl-cbs/team.md) already reasoned about this boundary for status reporting, and the consultation goes better carrying that reasoning.
+- **The control that makes the purpose limitation real: no tool here aggregates by actor.** Neither the dashboard nor `make usage` has a per-actor ranking, volume chart, or actor dimension, and `test_no_aggregation_groups_by_actor` fails if one is added. This log answers "did access control hold", never "how much did this person read".
+- **Retention 90 days**, enforced where the store is: production sets `CONTEXT_USAGE_LOG=""` so Log Analytics is the only store, with workspace retention set there and the workspace pinned to an EU region. Token validation is local and the JWKS fetch carries only public signing keys, so there is no Art. 44 transfer in the auth path.
+- **Not an Annex III high-risk AI system**, and the reason is worth keeping: no automated decision about a person, no profile, no ranking or score. Any future feature that ranks, scores or compares people changes that classification.
+- `KI_ICL_AUDIT_KEY` is a secret. Key Vault or a container-app secret, never this repo and never `~/.claude.json`, which is a plaintext home-directory file that gets backed up and synced.
 
 ## What this POC leaves out
 
@@ -365,5 +429,9 @@ Everything here is deliberate, and each item is cheap to add once it is wanted.
 - `ARTIFACTS_ROOT` becomes `settings.artifacts_dir`.
 - `_file_payload` is deleted in favour of `from utils.file_payload import file_payload`.
 
-`visible_domains()` is a pass-through today and must stay the only way a read path resolves a domain.
-It is the seam per-identity scoping lands on, and its whole value is that no read path can be written that forgets it.
+`visible_domains()` and `_readable_domains()` are the two scoping seams and must stay the only way a read path resolves a domain or reads a manifest row.
+Per-identity scoping landed on them, and their whole value is that no read path can be written that forgets it.
+That is now mechanical rather than aspirational: `principal` is a required keyword-only parameter on every payload function, pinned by `test_every_payload_function_requires_a_principal`, and the unfiltered row list is read in exactly one place, pinned by an `ast` test.
+
+One invariant to carry across the move, because it is the thing most likely to break: when the Azure blob fetch and ETag cache land, **the cache holds raw manifests and filtering happens after the cache, per request, always.**
+A cached filtered manifest served to a second principal is a cross-principal disclosure, and it is invisible today only because `domain_manifest()` re-reads from disk on every call.

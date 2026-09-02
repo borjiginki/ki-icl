@@ -4,6 +4,13 @@
       "type": "streamable-http",
       "url": "http://127.0.0.1:8000/mcp"
     },
+    "ki-icl-http-demo": {
+      "type": "streamable-http",
+      "url": "http://127.0.0.1:8000/mcp",
+      "headers": {
+        "Authorization": "Bearer demo-token-baseline"
+      }
+    },
     "ki-icl-stdio": {
       "type": "stdio",
       "command": ".venv/bin/python",
@@ -11,6 +18,17 @@
       "env": {
         "CONTEXT_ROOT": "dist/staging",
         "CONTEXT_USAGE_LOG": "logs/usage.jsonl"
+      }
+    },
+    "ki-icl-stdio-as-baseline": {
+      "type": "stdio",
+      "command": ".venv/bin/python",
+      "args": ["server/mcp_server.py"],
+      "env": {
+        "CONTEXT_ROOT": "dist/staging",
+        "CONTEXT_USAGE_LOG": "logs/usage.jsonl",
+        "KI_ICL_DEV_PRINCIPAL": "baseline",
+        "KI_ICL_ENFORCE": "1"
       }
     }
   }

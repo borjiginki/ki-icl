@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Package domains/ into dist/context/{context.tar.gz, manifest.json}. `make package`.
 
-Two things this does that the skills packager does not:
+Three things this does that the skills packager does not:
 
 1. It stamps every artifact with a `version_id` taken from the last commit that
    touched that artifact's folder. Repository head would be wrong: it moves on every
@@ -9,6 +9,10 @@ Two things this does that the skills packager does not:
 2. It emits a per-domain `_manifest.json` into the archive. The server serves
    `get_domain_manifest` straight out of that file, and it is the only place a
    version_id can be computed, because git is not available at runtime.
+3. It carries `access-policy.yaml` to the root of both outputs, beside `domains/`. The
+   grant table has to travel with the corpus it governs, or a deployment receives
+   content whose read decisions it cannot see. Beside `domains/` and never inside it,
+   because no read path can reach it there.
 
 Two output directories, and the difference matters:
 
@@ -40,12 +44,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts import status_header  # noqa: E402
+from server.access import POLICY_FILENAME  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT / "dist" / "context"
 STAGE_DIR = ROOT / "dist" / "staging"
 
-MANIFEST_FIELDS = ("title", "kind", "description", "review", "class", "owner")
+# `sensitivity` has to be here or authorization cannot see it: the runtime reads only
+# `_manifest.json`, never `artifact.yaml`, so a label that stops at the source tree does
+# not exist as far as the read path is concerned.
+MANIFEST_FIELDS = ("title", "kind", "description", "review", "sensitivity", "class", "owner")
 
 
 def _version_id(root: Path, rel_path: str) -> str:
@@ -128,10 +136,20 @@ def build(root: Path = ROOT, out_dir: Path = OUT_DIR, stage_dir: Path = STAGE_DI
         manifests.append(manifest)
         (staged / "_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
+    # The grant table travels with the corpus it governs, at the root beside `domains/`.
+    # In the archive because the archive is the whole of what a deployment receives and
+    # the runtime reads the policy from the served root; beside `domains/` rather than
+    # inside it because no read path can reach it there. It is deliberately NOT a third
+    # file in out_dir: `az storage blob upload-batch --source dist/context` must keep
+    # finding exactly two.
+    policy = root / POLICY_FILENAME
+    shutil.copy2(policy, stage_dir / POLICY_FILENAME)
+
     out_dir.mkdir(parents=True, exist_ok=True)
     archive = out_dir / "context.tar.gz"
     with tarfile.open(archive, "w:gz") as tar:
         tar.add(stage_dir / "domains", arcname="domains")
+        tar.add(stage_dir / POLICY_FILENAME, arcname=POLICY_FILENAME)
 
     summary = {
         "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),

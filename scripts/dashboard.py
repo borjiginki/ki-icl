@@ -545,6 +545,13 @@ def live_catalog() -> dict[str, Any] | None:
     Reuses the server's own `catalog_record` rather than a second implementation, so
     a live read and a logged snapshot can never disagree about shape. Cheap enough to
     do per poll: it is a stat of a small tree.
+
+    **This bypasses both of the read path's scoping seams, deliberately.** It lists
+    every artifact id in the corpus regardless of who may read it, because an operator
+    view is about the corpus rather than about a caller. So this dashboard is not
+    access-controlled content: it must stay on loopback, or whatever replaces it in
+    production has to be behind the same authentication as the server itself. It is POC
+    scaffolding to delete rather than port, and this is one more reason why.
     """
     try:
         from server.artifacts import ARTIFACTS_ROOT

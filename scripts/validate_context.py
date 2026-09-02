@@ -20,6 +20,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts import status_header  # noqa: E402
 
+# The ladder is defined in the runtime module rather than here, and imported, because
+# the gate must accept exactly what the server compares against. Two copies would
+# drift, which is the problem `status_header` exists to solve, one layer down. This
+# inverts the usual scripts/ -> server/ direction and is acceptable only because
+# `server.access` imports no FastMCP and reads no environment.
+from server.access import POLICY_FILENAME, SENSITIVITY_LEVELS  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 
 # Text only, by construction. Repository size risk is entirely a binaries risk:
@@ -53,7 +60,12 @@ REQUIRED_ARTIFACT_FILES: dict[str, tuple[str, ...]] = {
     "projects": ("status.md", "team.md"),
 }
 ID_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
-REQUIRED_ARTIFACT_FIELDS = ("title", "kind", "description", "review")
+REQUIRED_ARTIFACT_FIELDS = ("title", "kind", "description", "review", "sensitivity")
+
+# Entra app-role values. Dotted rather than kebab-case so they read as role names
+# rather than as artifact ids, and constrained at all so a grant cannot be keyed on a
+# display name that an administrator will later rename.
+ROLE_PATTERN = re.compile(r"^[a-z][a-z0-9.\-]*$")
 
 # Required, not optional, and this is the reason: the README has always said the
 # content here is unreviewed placeholder text, and no caller could ever see that. A
@@ -103,8 +115,17 @@ def validate(root: Path) -> list[str]:
     for domain_dir in sorted(d for d in domains_dir.iterdir() if d.is_dir()):
         _validate_domain(domain_dir, errors)
 
+    _validate_policy(root, errors)
+
     for file in sorted(p for p in domains_dir.rglob("*") if p.is_file()):
         rel = file.relative_to(root)
+        if file.name == POLICY_FILENAME:
+            errors.append(
+                f"{rel}: the access policy must live at the root of the tree, never "
+                f"under domains/. Beside `domains/` no read path can reach it; inside "
+                f"one it is an artifact-adjacent file, and the grant table is the last "
+                f"thing that should be servable."
+            )
         if file.suffix.lower() not in ALLOWED_SUFFIXES:
             errors.append(
                 f"{rel}: `{file.suffix}` is not an allowed extension. This phase is "
@@ -115,6 +136,89 @@ def validate(root: Path) -> list[str]:
             errors.append(f"{rel}: {file.stat().st_size} bytes exceeds the {MAX_FILE_BYTES} byte cap")
 
     return errors
+
+
+def _validate_policy(root: Path, errors: list[str]) -> None:
+    """Gate `access-policy.yaml`. A corpus nobody has decided the access for is invalid.
+
+    The load-bearing rule is the last one: the domain keys across the whole file must
+    equal KNOWN_DOMAINS *exactly*, in both directions. One rule catches a typo'd grant
+    that silently grants nothing, and a newly added domain that nobody has decided the
+    access for. It is what makes a new domain undeployable rather than merely invisible,
+    matching the "a decision, not a convention" rule the partition already lives by.
+
+    The runtime loader is deliberately more forgiving than this: it drops a grant it
+    cannot understand and keeps serving, because a policy that breaks after deployment
+    must degrade to denial rather than to an exception. This gate is where the
+    narrowing is refused outright, so that never reaches a deployment in the first
+    place.
+    """
+    path = root / POLICY_FILENAME
+    if not path.is_file():
+        errors.append(
+            f"{POLICY_FILENAME}: missing. Every domain needs a read decision before the "
+            f"corpus can be served, and this file is where they live."
+        )
+        return
+
+    data = _load_yaml(path, errors)
+    if data is None:
+        return
+
+    roles = data.get("roles")
+    if not isinstance(roles, dict) or not roles:
+        errors.append(f"{POLICY_FILENAME}: `roles` is required and must be a non-empty mapping")
+        return
+
+    granted: set[str] = set()
+    for role, body in roles.items():
+        if not isinstance(role, str) or not ROLE_PATTERN.match(role):
+            errors.append(
+                f"{POLICY_FILENAME}: role name {role!r} must be a lowercase dotted slug, "
+                f"for example `ctx.delivery`. It is an Entra app-role value, so it has to "
+                f"survive being typed into an app registration."
+            )
+        if not isinstance(body, dict):
+            errors.append(f"{POLICY_FILENAME}: role {role!r} must be a mapping")
+            continue
+
+        value = body.get("description")
+        if not isinstance(value, str) or not value.strip():
+            errors.append(
+                f"{POLICY_FILENAME}: role {role!r} needs a non-empty `description`. It is "
+                f"what makes this file reviewable by somebody who does not read Python, "
+                f"which is the reason grants live here rather than only in Entra."
+            )
+
+        grants = body.get("grants")
+        if grants is None:
+            grants = {}
+        if not isinstance(grants, dict):
+            errors.append(f"{POLICY_FILENAME}: role {role!r} has a `grants` that is not a mapping")
+            continue
+
+        for domain, level in grants.items():
+            granted.add(str(domain))
+            if level not in SENSITIVITY_LEVELS:
+                errors.append(
+                    f"{POLICY_FILENAME}: role {role!r} grants `{domain}` at {level!r}, which "
+                    f"is not one of "
+                    + ", ".join(f"`{k}` ({v})" for k, v in SENSITIVITY_LEVELS.items())
+                )
+
+    for domain in sorted(KNOWN_DOMAINS - granted):
+        errors.append(
+            f"{POLICY_FILENAME}: `{domain}` is a known domain that no role grants, so "
+            f"nobody could read it. Every domain needs a read decision; grant it to a "
+            f"role, or remove it from KNOWN_DOMAINS."
+        )
+    for domain in sorted(granted - KNOWN_DOMAINS):
+        errors.append(
+            f"{POLICY_FILENAME}: `{domain}` is granted but is not one of the agreed "
+            f"domains ({', '.join(sorted(KNOWN_DOMAINS))}). A grant for a domain that "
+            f"does not exist grants nothing today and something unintended the day "
+            f"somebody creates that folder."
+        )
 
 
 def _validate_domain(domain_dir: Path, errors: list[str]) -> None:
@@ -163,6 +267,11 @@ def _validate_artifact(artifact_dir: Path, seen: set[str], errors: list[str]) ->
             errors.append(
                 f"{label}/artifact.yaml: `review` is {review!r}, which is not one of "
                 + ", ".join(f"`{k}` ({v})" for k, v in REVIEW_STATES.items())
+            )
+        if (level := data.get("sensitivity")) is not None and level not in SENSITIVITY_LEVELS:
+            errors.append(
+                f"{label}/artifact.yaml: `sensitivity` is {level!r}, which is not one of "
+                + ", ".join(f"`{k}` ({v})" for k, v in SENSITIVITY_LEVELS.items())
             )
 
     if not (artifact_dir / "README.md").is_file():

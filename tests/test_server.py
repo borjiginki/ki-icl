@@ -113,3 +113,45 @@ async def test_the_script_runs_as_a_subprocess_the_way_a_stdio_client_launches_i
     lines = [json.loads(line) for line in usage_log.read_text().strip().splitlines()]
     assert lines[0]["event"] == "catalog"
     assert lines[-1]["tool"] == "list_domains"
+
+
+# --- the factory ------------------------------------------------------------
+
+
+async def test_build_server_produces_an_independently_configurable_server():
+    """`auth=` is constructor-only in FastMCP, so without a factory there is no way to
+    exercise more than one auth configuration in a single process, and the HTTP tests
+    could not exist at all."""
+    from server.mcp_server import build_server
+
+    unauthenticated = build_server()
+    guarded = build_server(auth=_static_auth())
+
+    assert unauthenticated.auth is None
+    assert guarded.auth is not None
+    assert {t.name for t in await unauthenticated.list_tools()} == {
+        t.name for t in await guarded.list_tools()
+    }
+
+
+def _static_auth():
+    from fastmcp.server.auth.providers.jwt import StaticTokenVerifier
+
+    return StaticTokenVerifier(tokens={"demo-token-x": {"client_id": "c", "scopes": []}})
+
+
+def test_the_module_level_server_is_still_the_one_the_tests_and_dashboard_import():
+    """The refactor must not move the name: tests/test_gaps.py and scripts/dashboard.py
+    both import `server.mcp_server.mcp`."""
+    from server import mcp_server
+
+    assert mcp_server.mcp.name == "ki-icl"
+
+
+def test_error_details_are_masked_so_an_exception_cannot_carry_content_to_the_client():
+    """FastMCP returns exception text verbatim by default, which makes the error path a
+    leak channel: a traceback naming an artifact id would disclose exactly what
+    authorization exists to withhold."""
+    from server import mcp_server
+
+    assert mcp_server.mcp._mask_error_details is True

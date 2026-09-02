@@ -1,0 +1,72 @@
+# Fake principals for local development. Not credentials for anything.
+#
+# `tests/test_demo_principals.py` loads THIS file rather than a copy, so a row that
+# stops making sense fails the suite instead of rotting. Each row exists to prove one
+# thing, and `test_every_row_proves_something_distinct` fails if a grant shape stops
+# being covered, which is what stops a tidy-up quietly deleting the fail-closed proof.
+#
+# `environment: local` is the kill switch: the loader refuses any other value. Every
+# token must also start with `demo-token-`, so a demo credential is recognisable as one
+# wherever it turns up, and `KI_ICL_AUTH=demo` is required before this file is read at
+# all. Under HTTP, demo mode refuses to bind anywhere but loopback.
+#
+# This file lives outside `domains/` so the packager has no path by which it could reach
+# an archive. `test_the_demo_table_is_absent_from_a_packaged_tree` proves it.
+#
+# Roles are the app-role values from access-policy.yaml. To try a grant change, edit
+# that file, not this one: these principals are the lenses, the policy is the subject.
+environment: local
+tenant: 00000000-0000-0000-0000-0000000d3m00
+client: 00000000-0000-0000-0000-00000c11e470
+
+principals:
+  # Reads widely across delivery, sales and finance, and STILL cannot read personnel
+  # material. This is the row that proves there is no global top level: it fails the day
+  # somebody adds a wildcard or an everything-role to the policy.
+  - id: broad
+    token: demo-token-broad
+    oid: 00000000-0000-4000-8000-000000000001
+    roles: [ctx.colleague, ctx.delivery, ctx.sales, ctx.finance]
+    scopes: [context.read]
+
+  # Raised in its own compartments only: projects at `restricted`, finance at
+  # `internal`. Proves the domain axis is a compartment and not a single clearance.
+  - id: delivery
+    token: demo-token-delivery
+    oid: 00000000-0000-4000-8000-000000000002
+    roles: [ctx.colleague, ctx.delivery]
+    scopes: [context.read]
+
+  # The only row that reaches `hr: confidential`, and deliberately not a leadership
+  # role. See the ctx.people description in access-policy.yaml.
+  - id: people
+    token: demo-token-people
+    oid: 00000000-0000-4000-8000-000000000003
+    roles: [ctx.colleague, ctx.people]
+    scopes: [context.read]
+
+  # Every domain, `internal` and no higher: what an ordinary colleague sees. Sees the
+  # projects domain and neither project in it.
+  - id: baseline
+    token: demo-token-baseline
+    oid: 00000000-0000-4000-8000-000000000004
+    roles: [ctx.colleague]
+    scopes: [context.read]
+
+  # Authenticated, granted nothing. The fail-closed proof: a valid token is not an
+  # authorization, and "signed in" and "allowed" are different questions with different
+  # remedies.
+  - id: no-grants
+    token: demo-token-no-grants
+    oid: 00000000-0000-4000-8000-000000000005
+    roles: []
+    scopes: [context.read]
+
+  # A valid row with a dead token. StaticTokenVerifier checks `expires_at`, so this
+  # gives a real expired-token 401 test with no RSA key and no clock manipulation.
+  - id: expired
+    token: demo-token-expired
+    oid: 00000000-0000-4000-8000-000000000006
+    roles: [ctx.colleague]
+    scopes: [context.read]
+    expires_at: 1735689600 # 2025-01-01, permanently in the past

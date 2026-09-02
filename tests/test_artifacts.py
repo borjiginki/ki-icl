@@ -11,12 +11,14 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import AS_COLLEAGUE
+
 
 # --- list_domains -----------------------------------------------------------
 
 
 def test_list_domains_lists_every_domain(artifacts):
-    payload = artifacts.list_domains_payload()
+    payload = artifacts.list_domains_payload(**AS_COLLEAGUE)
 
     assert [d["id"] for d in payload["domains"]] == ["company"]
     company = payload["domains"][0]
@@ -32,7 +34,7 @@ def test_list_domains_on_an_empty_catalog_returns_an_empty_list(
 ):
     monkeypatch.setattr(artifacts, "ARTIFACTS_ROOT", tmp_path / "nothing-here")
 
-    payload = artifacts.list_domains_payload()
+    payload = artifacts.list_domains_payload(**AS_COLLEAGUE)
 
     assert payload["domains"] == []
 
@@ -40,14 +42,14 @@ def test_list_domains_on_an_empty_catalog_returns_an_empty_list(
 def test_a_domain_without_a_manifest_is_skipped(artifacts, catalog: Path):
     (catalog / "domains" / "half-built").mkdir()
 
-    assert [d["id"] for d in artifacts.list_domains_payload()["domains"]] == ["company"]
+    assert [d["id"] for d in artifacts.list_domains_payload(**AS_COLLEAGUE)["domains"]] == ["company"]
 
 
 # --- get_domain_manifest ----------------------------------------------------
 
 
 def test_manifest_has_one_row_per_artifact_and_no_file_bodies(artifacts):
-    payload = artifacts.domain_manifest_payload("company")
+    payload = artifacts.domain_manifest_payload("company", **AS_COLLEAGUE)
 
     assert [a["id"] for a in payload["artifacts"]] == [
         "discovery-workshop",
@@ -72,7 +74,7 @@ def test_an_empty_domain_is_served_honestly_and_points_at_report_gap(artifacts, 
         encoding="utf-8",
     )
 
-    payload = artifacts.domain_manifest_payload("marketing")
+    payload = artifacts.domain_manifest_payload("marketing", **AS_COLLEAGUE)
 
     assert payload["artifacts"] == []
     assert "report_gap" in payload["fetch_hint"]
@@ -86,7 +88,7 @@ def test_the_manifest_warns_when_a_row_is_not_approved(artifacts):
     agent following that path never sees a "demo content" banner inside a file. The
     fixture's rows are unreviewed, which is the normal state of this corpus.
     """
-    hint = artifacts.domain_manifest_payload("company")["fetch_hint"]
+    hint = artifacts.domain_manifest_payload("company", **AS_COLLEAGUE)["fetch_hint"]
 
     assert "NOT APPROVED" in hint
     assert "expense-policy" in hint and "discovery-workshop" in hint
@@ -101,20 +103,20 @@ def test_an_approved_domain_gets_no_caveat(artifacts, catalog):
         row["review"] = "approved"
     path.write_text(json.dumps(manifest), encoding="utf-8")
 
-    hint = artifacts.domain_manifest_payload("company")["fetch_hint"]
+    hint = artifacts.domain_manifest_payload("company", **AS_COLLEAGUE)["fetch_hint"]
 
     assert "NOT APPROVED" not in hint
     assert "get_artifact" in hint
 
 
 def test_get_artifact_carries_the_review_state(artifacts):
-    entry = artifacts.get_artifact_payload("company", ["expense-policy"])["artifacts"][0]
+    entry = artifacts.get_artifact_payload("company", ["expense-policy"], **AS_COLLEAGUE)["artifacts"][0]
 
     assert "review" in entry
 
 
 def test_unknown_domain_manifest_is_not_found_and_names_the_real_domains(artifacts):
-    payload = artifacts.domain_manifest_payload("compnay")
+    payload = artifacts.domain_manifest_payload("compnay", **AS_COLLEAGUE)
 
     assert payload == {"status": "not_found", "domain": "compnay", "known": ["company"]}
 
@@ -124,7 +126,7 @@ def test_unknown_domain_manifest_is_not_found_and_names_the_real_domains(artifac
 
 def test_exact_hit_returns_every_file_and_its_metadata(artifacts):
     payload = artifacts.get_artifact_payload(
-        "company", ["expense-policy"], max_file_bytes=1_048_576
+        "company", ["expense-policy"], max_file_bytes=1_048_576, **AS_COLLEAGUE
     )
 
     (found,) = payload["artifacts"]
@@ -145,7 +147,7 @@ def test_a_miss_is_honest_and_carries_no_suggestion(artifacts):
     """One character off a real id. The whole value of this system is that a
     wrong answer is impossible, so a miss must never be a near match."""
     payload = artifacts.get_artifact_payload(
-        "company", ["expense-polcy"], max_file_bytes=1_048_576
+        "company", ["expense-polcy"], max_file_bytes=1_048_576, **AS_COLLEAGUE
     )
 
     (miss,) = payload["artifacts"]
@@ -154,7 +156,7 @@ def test_a_miss_is_honest_and_carries_no_suggestion(artifacts):
 
 def test_a_batch_degrades_per_item(artifacts):
     payload = artifacts.get_artifact_payload(
-        "company", ["expense-policy", "does-not-exist"], max_file_bytes=1_048_576
+        "company", ["expense-policy", "does-not-exist"], max_file_bytes=1_048_576, **AS_COLLEAGUE
     )
 
     statuses = [(a["id"], a["status"]) for a in payload["artifacts"]]
@@ -162,16 +164,16 @@ def test_a_batch_degrades_per_item(artifacts):
 
 
 def test_a_bare_string_id_behaves_like_a_one_element_list(artifacts):
-    bare = artifacts.get_artifact_payload("company", "expense-policy", max_file_bytes=1_048_576)
+    bare = artifacts.get_artifact_payload("company", "expense-policy", max_file_bytes=1_048_576, **AS_COLLEAGUE)
     listed = artifacts.get_artifact_payload(
-        "company", ["expense-policy"], max_file_bytes=1_048_576
+        "company", ["expense-policy"], max_file_bytes=1_048_576, **AS_COLLEAGUE
     )
 
     assert bare == listed
 
 
 def test_unknown_domain_on_get_artifact_is_not_found_with_no_artifacts_key(artifacts):
-    payload = artifacts.get_artifact_payload("company ", ["expense-policy"], max_file_bytes=1_048_576)
+    payload = artifacts.get_artifact_payload("company ", ["expense-policy"], max_file_bytes=1_048_576, **AS_COLLEAGUE)
 
     assert payload == {"status": "not_found", "domain": "company ", "known": ["company"]}
     assert "artifacts" not in payload
@@ -179,10 +181,20 @@ def test_unknown_domain_on_get_artifact_is_not_found_with_no_artifacts_key(artif
 
 @pytest.mark.parametrize(
     "hostile_id",
-    ["../../etc/passwd", "../company/expense-policy", "/etc/passwd", "expense-policy/../.."],
+    [
+        "../../etc/passwd",
+        "../company/expense-policy",
+        "/etc/passwd",
+        "expense-policy/../..",
+        # The grant table sits at the root of the served tree. Nothing should be able to
+        # walk up to it, and the last thing that should ever be servable is the file
+        # that decides who may read what.
+        "../../access-policy.yaml",
+        "../access-policy.yaml",
+    ],
 )
 def test_path_traversal_is_a_miss_and_reads_nothing(artifacts, hostile_id: str):
-    payload = artifacts.get_artifact_payload("company", [hostile_id], max_file_bytes=1_048_576)
+    payload = artifacts.get_artifact_payload("company", [hostile_id], max_file_bytes=1_048_576, **AS_COLLEAGUE)
 
     (entry,) = payload["artifacts"]
     assert entry == {"status": "not_found", "id": hostile_id}
@@ -192,7 +204,7 @@ def test_an_oversized_file_is_skipped_and_named(artifacts, catalog: Path):
     big = catalog / "domains" / "company" / "expense-policy" / "big.txt"
     big.write_text("x" * 5000, encoding="utf-8")
 
-    payload = artifacts.get_artifact_payload("company", ["expense-policy"], max_file_bytes=1000)
+    payload = artifacts.get_artifact_payload("company", ["expense-policy"], max_file_bytes=1000, **AS_COLLEAGUE)
 
     (found,) = payload["artifacts"]
     assert found["skipped_files"] == ["big.txt"]
@@ -205,7 +217,7 @@ def test_nested_supporting_files_are_returned_with_relative_paths(artifacts, cat
     nested.write_text("year,cap\n2026,25\n", encoding="utf-8")
 
     payload = artifacts.get_artifact_payload(
-        "company", ["expense-policy"], max_file_bytes=1_048_576
+        "company", ["expense-policy"], max_file_bytes=1_048_576, **AS_COLLEAGUE
     )
 
     (found,) = payload["artifacts"]
@@ -213,12 +225,29 @@ def test_nested_supporting_files_are_returned_with_relative_paths(artifacts, cat
 
 
 def test_visible_domains_is_the_only_scoping_seam(artifacts, monkeypatch):
-    """Every read path must resolve domains through visible_domains(), so that
-    per-identity scoping later has exactly one place to change."""
-    monkeypatch.setattr(artifacts, "visible_domains", lambda: [])
+    """Every read path must resolve domains through visible_domains(), so per-identity
+    scoping has exactly one place to make a domain decision.
 
-    assert artifacts.list_domains_payload()["domains"] == []
-    assert artifacts.domain_manifest_payload("company")["status"] == "not_found"
+    Per-identity scoping has now landed on it, so the stub takes the arguments the real
+    seam does. Starve it and every read path must go hungry: if any of the three still
+    returns content, it found a domain some other way.
+    """
+    monkeypatch.setattr(artifacts, "visible_domains", lambda *, principal, policy: [])
+
+    assert artifacts.list_domains_payload(**AS_COLLEAGUE)["domains"] == []
+    assert artifacts.domain_manifest_payload("company", **AS_COLLEAGUE)["status"] == "not_found"
     assert artifacts.get_artifact_payload(
-        "company", ["expense-policy"], max_file_bytes=1_048_576
+        "company", ["expense-policy"], max_file_bytes=1_048_576, **AS_COLLEAGUE
+    )["status"] == "not_found"
+
+
+def test_readable_domains_is_the_only_row_seam(artifacts, monkeypatch):
+    """The row seam's twin. Starve it and no payload builder can produce a row, which is
+    what makes redaction there sufficient rather than merely convenient."""
+    monkeypatch.setattr(artifacts, "_readable_domains", lambda *, principal, policy: [])
+
+    assert artifacts.list_domains_payload(**AS_COLLEAGUE)["domains"] == []
+    assert artifacts.domain_manifest_payload("company", **AS_COLLEAGUE)["status"] == "not_found"
+    assert artifacts.get_artifact_payload(
+        "company", ["expense-policy"], max_file_bytes=1_048_576, **AS_COLLEAGUE
     )["status"] == "not_found"

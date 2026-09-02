@@ -81,7 +81,10 @@ def _project(source_tree: Path, artifact_id: str = "dhl-cbs", **files: str) -> P
         projects,
         artifact_id,
         **{
-            "artifact__yaml": "title: P\nkind: project\nreview: demo\ndescription: A project.\n",
+            "artifact__yaml": (
+                "title: P\nkind: project\nreview: demo\nsensitivity: restricted\n"
+                "description: A project.\n"
+            ),
             "README__md": "# P\n",
             "status__md": GOOD_STATUS,
             "team__md": GOOD_TEAM,
@@ -195,3 +198,137 @@ def test_every_failure_is_collected_not_just_the_first(source_tree: Path):
     errors = validate(source_tree)
 
     assert len(errors) >= 3, errors
+
+
+# --- sensitivity and the access policy --------------------------------------
+
+from server.access import POLICY_FILENAME, SENSITIVITY_LEVELS  # noqa: E402
+from tests.conftest import write_policy  # noqa: E402
+
+
+def _artifact_yaml(source_tree: Path, body: str) -> None:
+    (source_tree / "domains" / "company" / "expense-policy" / "artifact.yaml").write_text(
+        body, encoding="utf-8"
+    )
+
+
+def test_an_artifact_without_a_sensitivity_is_rejected(source_tree: Path):
+    """Required, not optional, for the reason `review` is: an unlabelled row would have
+    to be given a default, and every default is wrong for something."""
+    _artifact_yaml(
+        source_tree,
+        "title: Expense policy\nkind: guideline\nreview: draft\ndescription: What we reimburse.\n",
+    )
+
+    errors = validate(source_tree)
+
+    assert any("sensitivity" in e and "expense-policy" in e for e in errors), errors
+
+
+def test_a_sensitivity_off_the_ladder_is_rejected_and_the_error_names_the_levels(
+    source_tree: Path,
+):
+    """The error is built from the level rationales, so an author is told what the
+    levels mean rather than only which strings are legal."""
+    _artifact_yaml(
+        source_tree,
+        "title: Expense policy\nkind: guideline\nreview: draft\n"
+        "sensitivity: top-secret\ndescription: What we reimburse.\n",
+    )
+
+    errors = validate(source_tree)
+
+    offending = [e for e in errors if "top-secret" in e]
+    assert offending, errors
+    assert all(level in offending[0] for level in SENSITIVITY_LEVELS), offending[0]
+
+
+def test_a_tree_with_no_access_policy_is_rejected(source_tree: Path):
+    """A corpus nobody has decided the access for is not a valid corpus."""
+    (source_tree / POLICY_FILENAME).unlink()
+
+    assert any(POLICY_FILENAME in e for e in validate(source_tree))
+
+
+def test_a_policy_that_leaves_a_known_domain_undecided_is_rejected(source_tree: Path):
+    """The rule that makes a new domain undeployable rather than merely invisible."""
+    write_policy(
+        source_tree,
+        "version: 1\nroles:\n  ctx.colleague:\n    description: Everyone.\n"
+        "    grants: {company: internal}\n",
+    )
+
+    errors = validate(source_tree)
+
+    assert any("hr" in e and POLICY_FILENAME in e for e in errors), errors
+
+
+def test_a_policy_naming_a_domain_outside_the_partition_is_rejected(source_tree: Path):
+    """The reverse direction: a typo grants nothing today and something unintended the
+    day somebody creates that folder."""
+    write_policy(
+        source_tree,
+        "version: 1\nroles:\n  ctx.colleague:\n    description: Everyone.\n"
+        "    grants:\n      company: internal\n      finance: internal\n      hr: internal\n"
+        "      marketing: internal\n      projects: internal\n      sales: internal\n"
+        "      value-creation: internal\n      value-delivery: internal\n"
+        "      operations: internal\n",
+    )
+
+    errors = validate(source_tree)
+
+    assert any("operations" in e for e in errors), errors
+
+
+def test_a_policy_role_without_a_description_is_rejected(source_tree: Path):
+    """The description is what makes the file reviewable by somebody who does not read
+    Python, which is the whole reason grants live here rather than in Entra alone."""
+    write_policy(
+        source_tree,
+        "version: 1\nroles:\n  ctx.colleague:\n"
+        "    grants:\n      company: internal\n      finance: internal\n      hr: internal\n"
+        "      marketing: internal\n      projects: internal\n      sales: internal\n"
+        "      value-creation: internal\n      value-delivery: internal\n",
+    )
+
+    errors = validate(source_tree)
+
+    assert any("description" in e and "ctx.colleague" in e for e in errors), errors
+
+
+def test_a_policy_grant_at_an_unknown_level_is_rejected(source_tree: Path):
+    """The loader drops such a grant to stay deny-safe at runtime. The gate refuses it
+    outright, so the silent narrowing never reaches a deployment."""
+    write_policy(
+        source_tree,
+        "version: 1\nroles:\n  ctx.colleague:\n    description: Everyone.\n"
+        "    grants:\n      company: sekrit\n      finance: internal\n      hr: internal\n"
+        "      marketing: internal\n      projects: internal\n      sales: internal\n"
+        "      value-creation: internal\n      value-delivery: internal\n",
+    )
+
+    assert any("sekrit" in e for e in validate(source_tree))
+
+
+def test_a_role_name_that_is_not_a_slug_is_rejected(source_tree: Path):
+    write_policy(
+        source_tree,
+        "version: 1\nroles:\n  Ctx Colleague!:\n    description: Everyone.\n"
+        "    grants:\n      company: internal\n      finance: internal\n      hr: internal\n"
+        "      marketing: internal\n      projects: internal\n      sales: internal\n"
+        "      value-creation: internal\n      value-delivery: internal\n",
+    )
+
+    assert any("Ctx Colleague!" in e for e in validate(source_tree))
+
+
+def test_an_access_policy_hidden_under_domains_is_rejected(source_tree: Path):
+    """The policy must never be servable. It cannot be reached today, and this is the
+    cheap guard that keeps it that way."""
+    (source_tree / "domains" / "company" / "expense-policy" / POLICY_FILENAME).write_text(
+        "version: 1\nroles: {}\n", encoding="utf-8"
+    )
+
+    errors = validate(source_tree)
+
+    assert any(POLICY_FILENAME in e and "expense-policy" in e for e in errors), errors

@@ -10,6 +10,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.package_context import build  # noqa: E402
+from server.access import POLICY_FILENAME  # noqa: E402
+from tests.conftest import AS_COLLEAGUE  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -29,7 +31,15 @@ def test_it_writes_an_archive_and_an_informational_manifest(source_tree: Path, t
     assert json.loads((out / "manifest.json").read_text())["archive"] == "context.tar.gz"
 
 
-def test_the_archive_is_rooted_at_domains(source_tree: Path, tmp_path: Path):
+def test_the_archive_holds_the_domain_tree_and_the_access_policy_and_nothing_else(
+    source_tree: Path, tmp_path: Path
+):
+    """The policy travels *with* the corpus, at the archive root beside `domains/`.
+
+    It has to be in the archive, because the archive is the whole of what a deployment
+    receives and the runtime reads the policy from the served root. It has to be beside
+    `domains/` rather than inside it, because no read path can reach it there.
+    """
     out, stage = tmp_path / "dist", tmp_path / "stage"
     build(source_tree, out, stage)
 
@@ -38,7 +48,42 @@ def test_the_archive_is_rooted_at_domains(source_tree: Path, tmp_path: Path):
 
     assert "domains/company/expense-policy/README.md" in names
     assert "domains/company/_manifest.json" in names
-    assert all(n == "domains" or n.startswith("domains/") for n in names)
+    assert POLICY_FILENAME in names
+    assert all(
+        n in ("domains", POLICY_FILENAME) or n.startswith("domains/") for n in names
+    ), names
+
+
+def test_the_access_policy_is_staged_at_the_root_of_the_servable_tree(
+    source_tree: Path, tmp_path: Path
+):
+    """dist/staging must be byte-identical to what extracting the archive produces, and
+    it is what CONTEXT_ROOT points at in local dev."""
+    out, stage = tmp_path / "dist", tmp_path / "stage"
+    build(source_tree, out, stage)
+
+    assert (stage / POLICY_FILENAME).is_file()
+    assert "ctx.colleague" in (stage / POLICY_FILENAME).read_text(encoding="utf-8")
+
+
+def test_the_upload_directory_still_holds_exactly_two_files(source_tree: Path, tmp_path: Path):
+    """`az storage blob upload-batch --source dist/context` must never find a third.
+    The policy goes into the archive, not beside it."""
+    out, stage = tmp_path / "dist", tmp_path / "stage"
+    build(source_tree, out, stage)
+
+    assert sorted(p.name for p in out.iterdir()) == ["context.tar.gz", "manifest.json"]
+
+
+def test_the_staged_policy_loads_as_a_policy(source_tree: Path, tmp_path: Path):
+    """Staging the file is not enough; the runtime has to be able to read it from there."""
+    from server import access
+
+    out, stage = tmp_path / "dist", tmp_path / "stage"
+    build(source_tree, out, stage)
+
+    policy = access.load_policy(stage, mode=access.Mode.ENFORCE)
+    assert policy.roles["ctx.colleague"]["company"] == "internal"
 
 
 def test_each_domain_manifest_is_sorted_by_id_and_stamps_every_artifact(
@@ -56,9 +101,19 @@ def test_each_domain_manifest_is_sorted_by_id_and_stamps_every_artifact(
     for row in manifest["artifacts"]:
         assert row["version_id"]
         assert set(row) == {
-            "id", "title", "kind", "description", "review", "class", "owner",
-            "version_id",
+            "id", "title", "kind", "description", "review", "sensitivity", "class",
+            "owner", "version_id",
         }
+
+
+def test_a_manifest_row_carries_its_sensitivity_label(source_tree: Path, tmp_path: Path):
+    """The runtime never reads artifact.yaml, only _manifest.json, so a label that does
+    not reach the manifest does not exist as far as authorization is concerned."""
+    out, stage = tmp_path / "dist", tmp_path / "stage"
+    build(source_tree, out, stage)
+
+    rows = {a["id"]: a for a in _manifest_in(stage, "company")["artifacts"]}
+    assert rows["expense-policy"]["sensitivity"] == "internal"
 
 
 def test_an_uncommitted_artifact_still_gets_a_version_id(source_tree: Path, tmp_path: Path, monkeypatch):
@@ -125,15 +180,15 @@ def test_the_packaged_output_is_exactly_what_the_read_path_serves(tmp_path: Path
     build(REPO_ROOT, out, stage)
     monkeypatch.setattr(artifacts, "ARTIFACTS_ROOT", stage)
 
-    domains = artifacts.list_domains_payload()["domains"]
+    domains = artifacts.list_domains_payload(**AS_COLLEAGUE)["domains"]
     assert domains, "this repo ships no domains"
 
     for domain in domains:
-        manifest = artifacts.domain_manifest_payload(domain["id"])
+        manifest = artifacts.domain_manifest_payload(domain["id"], **AS_COLLEAGUE)
         assert len(manifest["artifacts"]) == domain["artifact_count"]
 
         ids = [a["id"] for a in manifest["artifacts"]]
-        fetched = artifacts.get_artifact_payload(domain["id"], ids)
+        fetched = artifacts.get_artifact_payload(domain["id"], ids, **AS_COLLEAGUE)
         for entry in fetched["artifacts"]:
             assert entry["status"] == "found", entry
             readme = next(f for f in entry["files"] if f["path"] == "README.md")
