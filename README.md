@@ -15,7 +15,7 @@ One sentence: **make a markdown file in a git repository fetchable through the K
 
 Governed artifacts may be authored manually or generated from a software repository
 with the `generate-project-context` skill. Generation uses the read-only inspector
-(`.venv/bin/python scripts/inspect_project.py /absolute/path/to/project --pretty`),
+(`.venv/bin/python skills/generate-project-context/scripts/inspect_project.py /absolute/path/to/project --pretty`),
 asks a human about consequential facts the repository cannot prove, and requires
 review before writing under `domains/projects/<project-id>/`. It does not execute
 target code or collect/reproduce secrets. Run `make validate && make package` after

@@ -1,6 +1,6 @@
 # Project evidence schema
 
-`project_context.inspector` is the executable source of truth. Its JSON always contains `schema_version`, `repository`, `inspection`, `evidence`, `entry_points`, `deployables`, `technologies`, `integrations`, `conflicts`, `warnings`, and `unknowns`.
+[The bundled inspector](../scripts/inspector.py) is the executable source of truth. Its JSON always contains `schema_version`, `repository`, `inspection`, `evidence`, `entry_points`, `deployables`, `technologies`, `integrations`, `conflicts`, `warnings`, and `unknowns`.
 
 Evidence IDs have the form `e-0001` and are deterministic within an unchanged inspection, not stable across repository changes: they are assigned after sorting by category, subject, source, line range, and claim. Paths are relative to the target root except `repository.root`. `certain` means directly declared; `likely` requires a rationale. Valid evidence kinds are `runtime_configuration`, `dependency_manifest`, `lockfile`, `source_code`, `deployment_configuration`, `documentation`, and `user_statement` (the inspector does not emit the last one).
 

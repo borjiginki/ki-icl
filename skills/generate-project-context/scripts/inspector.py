@@ -1,4 +1,4 @@
-"""Deterministic, read-only inspection of software repositories.
+"""Deterministic, read-only inspection of software repositories for this skill.
 
 Target files are parsed as untrusted data. No target code is imported or executed.
 """

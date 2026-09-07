@@ -6,8 +6,7 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from project_context.inspector import inspect_project
+from inspector import inspect_project
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Inspect a software repository")
