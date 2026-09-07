@@ -1,0 +1,4 @@
+interface:
+  display_name: "Generate project context"
+  short_description: "Generate reviewed project context from a repository"
+  default_prompt: "Inspect this software project and generate its governed project-context artifact, asking me only consequential unanswered questions."

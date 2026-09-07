@@ -13,6 +13,14 @@ This tells it *what is true about the company*: methodologies, offerings, guidel
 
 One sentence: **make a markdown file in a git repository fetchable through the KI MCP, by id, with a version stamp.**
 
+Governed artifacts may be authored manually or generated from a software repository
+with the `generate-project-context` skill. Generation uses the read-only inspector
+(`.venv/bin/python scripts/inspect_project.py /absolute/path/to/project --pretty`),
+asks a human about consequential facts the repository cannot prove, and requires
+review before writing under `domains/projects/<project-id>/`. It does not execute
+target code or collect/reproduce secrets. Run `make validate && make package` after
+review. The existing exact-lookup guarantee remains unchanged.
+
 The property that matters is that a wrong answer is impossible.
 A lookup is an exact dictionary hit or an honest `not_found`.
 There is no similarity path, no closest match, and no fuzzy-matching code anywhere to be reached.
