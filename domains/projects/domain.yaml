@@ -1,0 +1,5 @@
+id: projects
+description: >-
+  Technical context for internal software projects: purpose, architecture, runtime
+  topology, integrations, and technology stacks. Use when onboarding, planning a
+  change, reviewing architecture, or understanding how a project runs.
