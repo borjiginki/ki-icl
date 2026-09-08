@@ -1,4 +1,4 @@
-.PHONY: help install validate package test serve serve-http demo clean
+.PHONY: help install validate package publish purge-and-republish test serve serve-http demo clean
 
 PY := .venv/bin/python
 
@@ -7,6 +7,8 @@ help:
 	@echo "  install     create .venv and install dependencies"
 	@echo "  validate    run the structural validation gate over domains/"
 	@echo "  package     build dist/context/ (upload dir) and dist/staging/ (servable tree)"
+	@echo "  publish     package, then upload dist/staging/ to the Files share (ACCOUNT=... [RESOURCE_GROUP=...])"
+	@echo "  purge-and-republish  wipe the share and republish - rare, reclaims space (ACCOUNT=...)"
 	@echo "  test        run the test suite"
 	@echo "  serve       run the MCP server over stdio, serving dist/staging"
 	@echo "  serve-http  same, over HTTP on 127.0.0.1:8000/mcp, unauthenticated"
@@ -27,6 +29,66 @@ validate:
 
 package: validate
 	$(PY) scripts/package_context.py
+
+# Requires ACCOUNT: the Files storage account name (`terraform output -raw
+# files_storage_account_name` from deploy/). Uploads what CONTEXT_ROOT will read from
+# the mount, lists the result so the upload is visible without a second command, then
+# takes a share snapshot as a point-in-time record, since the image tag no longer
+# answers "what was served when" for a mounted corpus. See deploy/README.md.
+#
+# Safe to re-run for ordinary edits and additions, and even for an artifact removed from
+# domains/: package regenerates every manifest fresh on every run, and upload-batch
+# overwrites it, so a delisted id simply stops resolving on the read path immediately,
+# before its now-orphaned files are ever physically deleted. upload-batch itself never
+# deletes, so reclaiming that storage, or fully scrubbing removed bytes, needs
+# `make purge-and-republish` instead - a separate, deliberately rarer target.
+#
+# No key or SAS token is passed: omitting both makes the CLI resolve the account key
+# itself via the operator's own `az login` RBAC (Storage Account Key Operator Service
+# Role or above), so the human running this never handles the raw key at all. That
+# needs real RBAC on the account, not just data-plane rights - see deploy/README.md if
+# this fails on authorization.
+#
+# Brackets everything in a temporary public-access window: the account normally has
+# public_network_access_enabled = false (see deploy/storage.tf), and as of this
+# writing nothing links kiicl-vnet to any other network, so nothing outside it -
+# including wherever this target runs from - can reach the account's private endpoint
+# at all. The trap always closes the window again, even if any step fails partway, so
+# a failed publish does not silently leave the share publicly reachable. This is a
+# deliberate, disclosed workaround for not having real VPN/peering connectivity into
+# kiicl-vnet yet, not the long-term shape: worth revisiting if publishing becomes
+# frequent enough for the open window to matter.
+RESOURCE_GROUP ?= ki-icl-sandbox
+
+publish: package
+	@test -n "$(ACCOUNT)" || (echo "Usage: make publish ACCOUNT=<files storage account name>" >&2 && exit 1)
+	az storage account update --name "$(ACCOUNT)" --resource-group "$(RESOURCE_GROUP)" \
+	  --public-network-access Enabled --output none
+	@echo "waiting for public access to propagate..." && sleep 20
+	@trap 'az storage account update --name "$(ACCOUNT)" --resource-group "$(RESOURCE_GROUP)" \
+	  --public-network-access Disabled --output none' EXIT; \
+	  az storage file upload-batch --destination context --source dist/staging \
+	    --account-name "$(ACCOUNT)" && \
+	  az storage file list --share-name context --account-name "$(ACCOUNT)" -o table && \
+	  az storage share snapshot --name context --account-name "$(ACCOUNT)"
+
+# The separate, deliberately rarer path for actually reclaiming storage or scrubbing
+# the bytes of a removed artifact - see the comment above `publish` for why the
+# routine path never needs this. Wipes the share and republishes in the same access
+# window, so there is no gap where the share is empty and reachable at once; there is
+# still a brief window where it is empty, which is why this is its own command rather
+# than something `publish` does by default.
+purge-and-republish: package
+	@test -n "$(ACCOUNT)" || (echo "Usage: make purge-and-republish ACCOUNT=<files storage account name>" >&2 && exit 1)
+	az storage account update --name "$(ACCOUNT)" --resource-group "$(RESOURCE_GROUP)" \
+	  --public-network-access Enabled --output none
+	@echo "waiting for public access to propagate..." && sleep 20
+	@trap 'az storage account update --name "$(ACCOUNT)" --resource-group "$(RESOURCE_GROUP)" \
+	  --public-network-access Disabled --output none' EXIT; \
+	  az storage file delete-batch --source context --account-name "$(ACCOUNT)" --pattern '*' && \
+	  az storage file upload-batch --destination context --source dist/staging \
+	    --account-name "$(ACCOUNT)" && \
+	  az storage share snapshot --name context --account-name "$(ACCOUNT)"
 
 test:
 	$(PY) -m pytest -q

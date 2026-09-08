@@ -7,10 +7,15 @@ resource "azurerm_container_app_environment" "this" {
 
   log_analytics_workspace_id = azurerm_log_analytics_workspace.this.id
 
-  # The two lines that make this private. `internal_load_balancer_enabled` gives the
-  # environment a private IP instead of a public one, and requires the subnet.
+  # VNet-integrated regardless of ingress, so the environment can still reach the Files
+  # private endpoint (see network.tf). internal_load_balancer_enabled used to be true,
+  # which turned out to bind the environment to a private-only static IP no matter what
+  # the app's own ingress said - var.external_ingress_enabled alone could not reach this
+  # from outside kiicl-vnet. Public here; var.external_ingress_enabled on the app's own
+  # ingress below is what actually gates exposure, since false there keeps the app
+  # internal-only (dapr-to-dapr) even with a public environment.
   infrastructure_subnet_id       = azurerm_subnet.infrastructure.id
-  internal_load_balancer_enabled = true
+  internal_load_balancer_enabled = false
 
   workload_profile {
     name                  = "Consumption"
@@ -18,6 +23,25 @@ resource "azurerm_container_app_environment" "this" {
   }
 
   tags = var.tags
+}
+
+# The Files share's access key, taken directly from the storage account resource.
+# azurerm_container_app_environment_storage.access_key is a plain attribute with no
+# Key-Vault-reference option in this provider version (unlike the audit key's
+# `key_vault_secret_id` string, resolved by the platform at runtime), and
+# azurerm_storage_account computes its keys into its own state regardless of whether
+# anything references them - so routing this through Key Vault first would not have
+# kept it out of state either. Going direct removes a Key Vault bootstrap step and its
+# RBAC dependency for no change in what's actually exposed. See versions.tf.
+resource "azurerm_container_app_environment_storage" "context" {
+  name                         = "context-files"
+  container_app_environment_id = azurerm_container_app_environment.this.id
+  account_name                 = azurerm_storage_account.files.name
+  share_name                   = azurerm_storage_share.context.name
+  access_key                   = azurerm_storage_account.files.primary_access_key
+
+  # ReadOnly: the server only ever reads its corpus, and this mount is no exception.
+  access_mode = "ReadOnly"
 }
 
 resource "azurerm_container_app" "this" {
@@ -57,12 +81,29 @@ resource "azurerm_container_app" "this" {
   }
 
   ingress {
-    # The security boundary of this whole deployment. Flipping it to true puts the
-    # corpus on the internet with Entra token validation as the only thing in front of
-    # it, so it should never change in the same commit as anything else.
-    external_enabled = false
+    # The security boundary of this whole deployment. Public with auth_mode = "off" has
+    # no gate but the IP restrictions below, which is why this defaults to internal and
+    # needs a deliberate opt-in - see var.external_ingress_enabled.
+    external_enabled = var.external_ingress_enabled
     target_port      = 8000
     transport        = "http"
+
+    # Ignored entirely while external_ingress_enabled is false. Once true, Container
+    # Apps' ip_security_restriction is deny-by-default the moment any Allow rule
+    # exists, so this is the only thing standing between the internet and an
+    # unauthenticated corpus - a deliberate, disclosed trade for reaching this from
+    # outside kiicl-vnet without a VPN gateway, meant for a short testing window
+    # rather than as a permanent posture. Revisit once auth_mode = "entra" is real:
+    # at that point the token requirement carries the weight this IP list carries now.
+    dynamic "ip_security_restriction" {
+      for_each = var.external_ingress_enabled ? var.allowed_client_cidrs : []
+      content {
+        name             = ip_security_restriction.value.name
+        action           = "Allow"
+        ip_address_range = ip_security_restriction.value.cidr
+        description      = ip_security_restriction.value.description
+      }
+    }
 
     traffic_weight {
       latest_revision = true
@@ -73,6 +114,16 @@ resource "azurerm_container_app" "this" {
   template {
     min_replicas = var.min_replicas
     max_replicas = var.max_replicas
+
+    # Harmless for the quickstart image, like every env var below: the volume exists
+    # from the first apply, mounting an empty share until Stage 2 publishes content to
+    # it. See deploy/README.md.
+    volume {
+      name          = "context-files"
+      storage_type  = "AzureFile"
+      storage_name  = azurerm_container_app_environment_storage.context.name
+      mount_options = "uid=10001,gid=10001,file_mode=0444,dir_mode=0555"
+    }
 
     container {
       name   = "context"
@@ -93,6 +144,14 @@ resource "azurerm_container_app" "this" {
         port             = 8000
         initial_delay    = 5
         interval_seconds = 30
+      }
+
+      # Mounted at exactly the path CONTEXT_ROOT already points at below, so the corpus
+      # arrives with zero code or env-var changes: server/artifacts.py already reads
+      # whatever is at CONTEXT_ROOT fresh on every call.
+      volume_mounts {
+        name = "context-files"
+        path = "/app/context"
       }
 
       # Everything below is only meaningful for the real image. The quickstart container
@@ -209,8 +268,8 @@ resource "azurerm_container_app" "this" {
     }
 
     precondition {
-      condition     = !(local.serving_ki_icl && !var.create_role_assignments)
-      error_message = "Pulling from the registry needs the managed identity to hold AcrPull. Grant it first, then re-run with create_role_assignments = false."
+      condition     = !(local.serving_ki_icl && !var.create_role_assignments && !var.acr_pull_confirmed)
+      error_message = "Pulling from the registry needs the managed identity to hold AcrPull. Either let this configuration create it (create_role_assignments = true), or confirm the grant yourself against the real principal id and set acr_pull_confirmed = true."
     }
   }
 

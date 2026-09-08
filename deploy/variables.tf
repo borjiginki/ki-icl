@@ -7,7 +7,7 @@ variable "subscription_id" {
 variable "resource_group_name" {
   description = "Created by this configuration, so it is destroyable as one unit."
   type        = string
-  default     = "hurile-playground"
+  default     = "ki-icl-sandbox"
 }
 
 variable "location" {
@@ -42,8 +42,10 @@ variable "image" {
       az acr build --registry <acr_name> --image ki-icl:<sha> ..
       terraform apply -var image=<acr_login_server>/ki-icl:<sha>
 
-    Pin a digest or a commit sha, never `latest`: a moving tag makes "which corpus was
-    served on Tuesday" unanswerable, which is the reason the corpus is baked in.
+    Pin a digest or a commit sha, never `latest`, for the same review-trail reason as
+    always, even though the corpus itself no longer travels with this tag - only the
+    server code does. "Which corpus was served on Tuesday" is now answered by a share
+    snapshot taken at publish time instead; see deploy/README.md Stage 2.
   EOT
   type        = string
   default     = ""
@@ -112,6 +114,7 @@ variable "audit_key_secret_name" {
   default     = "context-audit-key"
 }
 
+
 # --- knobs with defensible defaults ----------------------------------------
 
 variable "create_role_assignments" {
@@ -126,6 +129,26 @@ variable "create_role_assignments" {
   EOT
   type        = bool
   default     = true
+}
+
+variable "acr_pull_confirmed" {
+  description = <<-EOT
+    Whether AcrPull has been confirmed granted to the managed identity some other way,
+    when create_role_assignments = false so this configuration isn't the one that
+    granted it.
+
+    Exists because the precondition guarding a real `image` value has no way to check
+    real Azure state on its own - it can only see this configuration's own variables.
+    Without this, there was no way to satisfy that precondition except by setting
+    create_role_assignments = true, even after confirming out of band (e.g.
+    `az role assignment list --assignee-object-id <managed_identity_principal_id>`)
+    that the grant already exists. Set this true only after checking yourself, not on
+    someone else's say-so: a role assignment can exist and still target the wrong
+    principal, as happened here once already (an app registration's client id was used
+    where the principal/object id was needed).
+  EOT
+  type        = bool
+  default     = false
 }
 
 variable "log_retention_days" {
@@ -156,6 +179,22 @@ variable "max_replicas" {
   description = "Reads are stateless and the corpus is tiny, so this is a ceiling against a runaway rather than a capacity plan."
   type        = number
   default     = 3
+}
+
+variable "external_ingress_enabled" {
+  description = "Whether the app's ingress is public. False (default) keeps the deployment's one existing security boundary intact. True opens it to the internet, gated only by allowed_client_cidrs below - a deliberate, disclosed trade for reaching this from outside kiicl-vnet without a VPN gateway, meant for a testing window rather than a permanent posture."
+  type        = bool
+  default     = false
+}
+
+variable "allowed_client_cidrs" {
+  description = "CIDR ranges allowed to reach the app when external_ingress_enabled = true. Ignored while ingress stays internal. Container Apps' ip_security_restriction is deny-by-default the moment any Allow rule exists, so listing nothing here with external_ingress_enabled = true would deny everyone, not open everyone."
+  type = list(object({
+    name        = string
+    cidr        = string
+    description = optional(string, "")
+  }))
+  default = []
 }
 
 variable "tags" {

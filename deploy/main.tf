@@ -26,6 +26,11 @@ locals {
   image          = var.image != "" ? var.image : "mcr.microsoft.com/k8se/quickstart:latest"
   serving_ki_icl = var.image != ""
   identifier_uri = var.entra.identifier_uri != "" ? var.entra.identifier_uri : "api://${var.entra.client_id}"
+
+  # Storage account name: lowercase alphanumeric only, 3 to 24 characters, globally
+  # unique. Same suffix as acr_name/vault_name, so all names rotate together if the
+  # suffix ever does.
+  files_account_name = "${var.name_prefix}files${random_string.suffix.result}"
 }
 
 resource "azurerm_resource_group" "this" {

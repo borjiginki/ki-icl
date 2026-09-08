@@ -1,57 +1,28 @@
-# The context server, with its corpus baked in.
+# The context server. The corpus is no longer part of this image.
 #
-# The corpus is built here rather than mounted, so the image tag answers "what was
-# served when". A content edit means a rebuild and a new revision, which is the trade
-# taken deliberately: immutability and an audit trail, against minutes of latency on a
-# content change.
+# It used to be baked in here, on purpose: the image tag answered "what was served
+# when," traded against needing a rebuild for every content edit. That trade is reversed
+# now: the corpus is published separately to an Azure Files share and mounted read-only
+# at CONTEXT_ROOT (see deploy/README.md, Stage 2), so a content edit no longer touches
+# this image at all. The "what was served on Tuesday" property moves with it, carried by
+# the publish step's own record-keeping (a share snapshot) rather than by this tag.
 #
-# Two stages because packaging needs git and the runtime does not. `version_id` on every
-# artifact is the last commit that touched that artifact's folder, so the builder needs
-# real history. Without it the packager falls back to GITHUB_SHA and then to
-# "uncommitted", and every artifact would report the same opaque stamp.
+# One stage, because there is nothing left for a builder stage to do: validating and
+# packaging the corpus (`scripts/validate_context.py`, `scripts/package_context.py`) now
+# happens at publish time, not build time, and CI already runs both on every push
+# independently of this image.
 #
 #   az acr build --registry <acr> --image ki-icl:$(git rev-parse --short HEAD) .
 #
-# Python 3.12 because that is what CI validates against. The local venv is 3.14; nothing
-# here depends on the difference, but the tested version is the one to ship.
+# Python 3.12 because that is what CI validates against.
 
-FROM python:3.12-slim AS builder
+FROM python:3.12-slim
 
-# git for the version stamp, and nothing else. The packager is stdlib plus pyyaml.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends git \
- && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /src
-# Only what the gate and the packager need, which is pyyaml and the standard library.
-# Installing requirements.txt here would pull FastMCP and its whole tree into a stage
-# that never imports it: `server/access.py` is deliberately free of FastMCP, which is
-# what lets `scripts/` import the sensitivity ladder from it.
-RUN pip install --no-cache-dir "pyyaml>=6.0"
-
-# .git comes with the context so `git log` can stamp each artifact. If you build from a
-# tree without it, pass --build-arg GITHUB_SHA=<sha> and the packager uses that instead.
-ARG GITHUB_SHA=""
-ENV GITHUB_SHA=${GITHUB_SHA}
-
-COPY . .
-
-# Validate before packaging, so a corpus that fails the gate cannot become an image.
-# This is the same gate CI runs, and it is cheaper to fail here than to deploy and
-# discover a missing `sensitivity` label as a runtime denial.
-RUN python scripts/validate_context.py \
- && python scripts/package_context.py
-
-
-FROM python:3.12-slim AS runtime
-
-# No git, no build tools, no test dependencies.
 WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY server/ ./server/
-COPY --from=builder /src/dist/staging/ ./context/
 
 # `config/demo_principals.yaml` is deliberately NOT copied. Demo identities cannot work
 # here anyway (they are loopback-only and this binds 0.0.0.0), so shipping them would
@@ -66,6 +37,9 @@ USER app
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    # No longer baked content: a mount point. See deploy/README.md Stage 2. Runnable
+    # locally too, pointed at dist/staging (`make serve-http`), in which case this is
+    # just an ordinary directory.
     CONTEXT_ROOT=/app/context \
     # Empty on purpose: stderr becomes the only sink, which is what production wants.
     # A file inside a container is a store nobody owns and nobody rotates, and Log

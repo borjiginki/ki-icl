@@ -410,15 +410,15 @@ Engineering does not block on these, but production does.
 ## Deploying
 
 [deploy/](deploy/) holds Terraform for Azure Container Apps, and [deploy/README.md](deploy/README.md) is the runbook.
-Target is the KI-PER Data Platform Sandbox, resource group `hurile-playground`, Germany West Central.
+Target is the KI-PER Data Platform Sandbox, resource group `ki-icl-sandbox`, Germany West Central.
 
 The shape, and the two things worth knowing before reading the rest:
 
 - **Ingress is internal.** The environment gets a private IP, so only a VNet linked to its private DNS zone can reach it. That is what makes running with `KI_ICL_AUTH=off` defensible at first: the network is the control. It also means claude.ai and Claude Desktop cannot reach it, only Claude Code from inside that network.
-- **The corpus is baked into the image**, validated by the same gate CI runs, so the image tag answers "which corpus was served on Tuesday". A content edit means a rebuild and a new revision. That is the cost of the audit trail, paid deliberately.
+- **The corpus lives on a mounted, privately-reachable Azure Files share**, published separately from the image (`make publish`) and validated by the same gate CI runs before it lands there. This used to be baked into the image, which made the image tag answer "which corpus was served on Tuesday"; that property now belongs to a share snapshot taken at publish time instead, traded for not needing a rebuild on every content edit.
 
-Four stages, each of which leaves something working: infrastructure with a placeholder image, then the real image with grants observed rather than enforced, then the audit key, then Entra.
-The third and fourth are where personal data starts being processed, and the runbook says so at the point where it happens.
+Five stages, each of which leaves something working: infrastructure with a placeholder image, then the corpus published to the share, then the real image with grants observed rather than enforced, then the audit key, then Entra.
+The fourth and fifth are where personal data starts being processed, and the runbook says so at the point where it happens.
 
 ## What this POC leaves out
 

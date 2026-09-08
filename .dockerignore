@@ -1,11 +1,14 @@
-# .git is deliberately NOT ignored: the packager stamps every artifact with the last
-# commit that touched its folder, and without history every artifact would carry the
-# same fallback stamp.
+# .git used to be deliberately kept for the packager's version-stamping git log calls.
+# Packaging now happens at publish time (see deploy/README.md), not in this image, so
+# this build no longer needs history at all.
+.git/
 .venv/
 __pycache__/
 *.pyc
 .pytest_cache/
 dist/
+domains/
+access-policy.yaml
 logs/
 deploy/.terraform/
 deploy/*.tfstate

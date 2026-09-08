@@ -9,7 +9,7 @@ output "acr_login_server" {
 }
 
 output "mcp_url" {
-  description = "The endpoint an MCP client dials. Resolvable only from inside a VNet linked to the private DNS zone, which is the point of internal ingress."
+  description = "The endpoint an MCP client dials. Publicly resolvable now that the environment's load balancer is public; var.external_ingress_enabled and the allow-list in var.allowed_client_cidrs are what actually gate who can reach it."
   value       = "https://${azurerm_container_app.this.ingress[0].fqdn}/mcp"
 }
 
@@ -28,9 +28,14 @@ output "log_analytics_workspace_id" {
   value       = azurerm_log_analytics_workspace.this.id
 }
 
-output "private_dns_zone" {
-  description = "Link this zone to any other VNet that needs to reach the server. That link is the moment somebody decides who can read the corpus, so it is deliberately not automatic."
-  value       = azurerm_private_dns_zone.apps.name
+output "files_storage_account_name" {
+  description = "Pass to `make publish` (ACCOUNT=...) to publish domains/ content to the mounted share."
+  value       = azurerm_storage_account.files.name
+}
+
+output "files_share_name" {
+  description = "The share `make publish` uploads to and the app mounts."
+  value       = azurerm_storage_share.context.name
 }
 
 output "what_is_running" {
