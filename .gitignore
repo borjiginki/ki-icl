@@ -8,3 +8,6 @@ logs/
 *.tfstate
 *.tfstate.backup
 *.tfplan
+.env
+.env.*
+!.env.example

@@ -12,26 +12,21 @@ terraform {
     }
   }
 
-  # State is local, which is fine for a sandbox and wrong for anything shared: it holds
-  # resource ids, the ACR login server, and whatever a future resource decides to
-  # record. Moving it to a storage account backend is a bootstrap of its own (the
-  # backend cannot be created by the configuration that uses it), so it is deliberately
-  # not attempted here. If a second person ever runs this, do that first.
+  # State lives in a storage account this configuration deliberately does not manage: the
+  # backend cannot be created by the configuration that uses it, so the resource group,
+  # storage account and container are bootstrapped once by hand (see deploy/README.md,
+  # "Remote state"). Account, container and key name are passed via -backend-config
+  # rather than hardcoded here, so this file names no environment-specific value; local
+  # runs and CI both supply the same three flags plus an access key, kept out of git and
+  # out of this file the same way the audit key is.
   #
-  # The audit key is NOT in state: the Key Vault secret is created out of band and
-  # referenced by a versionless URI. See deploy/README.md.
-  #
-  # The Files storage account is a different story, and not one this bootstrap problem
-  # can dodge: azurerm_storage_account computes its access keys into its own state entry
-  # the moment the resource is managed at all, regardless of whether anything references
-  # them, and here the key is also actively used (see app.tf) - fed straight from the
-  # resource into azurerm_container_app_environment_storage, which has no Key-Vault
-  # reference option the way the audit key does. This key stays out of git (see
-  # .gitignore) and the account refuses public network access, so a leaked key alone is
-  # not sufficient without also reaching the private network - but this is still the
-  # first secret material this configuration holds that local, unencrypted state
-  # actually exposes. Treat moving to a remote, encrypted backend as materially more
-  # urgent than the paragraph above implies on its own, not just a someday cleanup.
+  # This is also why it matters: azurerm_storage_account computes its access keys into
+  # its own state entry the moment the resource is managed at all, and the Files
+  # account's key is actively used (see app.tf) - fed straight into
+  # azurerm_container_app_environment_storage, which has no Key-Vault reference option
+  # the way the audit key does. Local, unencrypted state was already exposing that key;
+  # a remote backend stops being a someday cleanup the moment that is true.
+  backend "azurerm" {}
 }
 
 provider "azurerm" {

@@ -36,11 +36,43 @@ So publishing the corpus (Stage 2) still needs the workaround that section descr
 - Permission to write role assignments, which Owner and User Access Administrator have and Contributor does not. If apply fails on authorization, see [when role assignments fail](#when-role-assignments-fail).
 - To run Stage 2 (publishing the corpus), permission to toggle the Files storage account's public network access (`Storage Account Contributor` or better) — see Stage 2 for why this is needed at all.
 
+## Remote state
+
+State lives in an Azure Storage blob, not on a laptop: local, unencrypted state was
+already exposing the Files share's access key (see `versions.tf`), and CI needs a state
+it can read regardless of whose machine ran the last apply.
+
+The backend storage account cannot be created by the configuration that uses it, so it
+is bootstrapped once, by hand, in its own resource group, outside `ki-icl-sandbox` so
+that a `terraform destroy` of the sandbox can never delete the state describing that
+destroy while it is still running:
+
+```bash
+az group create --name ki-icl-tfstate --location germanywestcentral
+
+az storage account create --name <globally-unique-name> --resource-group ki-icl-tfstate \
+  --location germanywestcentral --sku Standard_LRS --kind StorageV2 \
+  --min-tls-version TLS1_2 --allow-blob-public-access false
+
+az storage container create --name tfstate --account-name <name> --auth-mode login
+```
+
+Reachable over the public internet on purpose (see [What this is](#what-this-is) for the
+same trade made on the app's own ingress): a private endpoint would need a network path
+in from GitHub-hosted runners that does not exist, and this account's access key is the
+real gate regardless, the same "key, not network, is the boundary" pattern this
+deployment already uses for the Files share. Write the account and container names into
+`backend.hcl` (not secret, already committed); the access key itself is never written to
+a file, here or anywhere else - it is read into `ARM_ACCESS_KEY` at init time, locally
+and in CI alike.
+
 ## Stage 1: the infrastructure, with nothing of ours running
 
 ```bash
 cd deploy
-terraform init
+export ARM_ACCESS_KEY=$(az storage account keys list --account-name <tfstate-account> \
+  --resource-group ki-icl-tfstate --query '[0].value' -o tsv)
+terraform init -backend-config=backend.hcl
 terraform apply
 ```
 
@@ -184,6 +216,33 @@ claude mcp add --transport http ki-icl-azure "$(terraform output -raw mcp_url)"
 
 Once `auth_mode = entra`, Claude Code will run the OAuth flow against Entra.
 Whether it can do that against a tenant with no dynamic client registration needs checking against the real client, and `--client-id` exists for exactly that case.
+
+## CI/CD
+
+`.github/workflows/deploy.yml` runs on every push to `main`: builds and pushes the
+image, publishes the corpus if `domains/` or `access-policy.yaml` changed, then plans
+the infrastructure. It authenticates as a dedicated service principal (Contributor on
+the subscription, four secrets: `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`,
+`AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`), separate from the identity anyone applies
+locally with, and reads/writes the same remote state described above (a fifth secret,
+`TF_STATE_ACCESS_KEY`).
+
+**Applying is the one step that waits for a human.** The `terraform-apply` job targets
+the `azure-infra` GitHub Environment, which requires approval before it runs - the plan
+is visible first, in the `terraform-plan` job's log, so approving is not blind. This
+stays manual on purpose: an incremental-looking Terraform change forced a full
+environment replacement earlier in this deployment's life (see [What this
+is](#what-this-is)), discovered only by testing reachability for real rather than
+trusting the plan's own summary line, and that is exactly the kind of surprise this
+gate exists to catch before it reaches real infrastructure unattended.
+
+**External ingress is deliberately not something CI manages.** `deploy/ci.auto.tfvars`
+carries the baseline every apply needs (`create_role_assignments = false`,
+`acr_pull_confirmed = true`), but `external_ingress_enabled` and `allowed_client_cidrs`
+stay a manual override you apply yourself when you want to reach the app from outside
+`kiicl-vnet` (see [Reaching it](#reaching-it)). A CI-triggered apply that ran without
+them would reset ingress to internal-only, the variable's default - if you still want
+external access afterward, re-run your own apply with those two flags.
 
 ## When role assignments fail
 

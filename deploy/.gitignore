@@ -2,9 +2,9 @@
 .terraform/
 .terraform.lock.hcl
 
-# State holds resource ids and whatever a future resource decides to record. It is
-# local for a sandbox, which is fine for one person and wrong for two; if a second
-# person ever runs this, move it to a storage account backend first.
+# State holds resource ids and whatever a future resource decides to record. It lives
+# in a remote azurerm backend now (see versions.tf and backend.hcl), not locally, but
+# terraform init still leaves a thin local pointer file behind.
 *.tfstate
 *.tfstate.*
 .terraform.tfstate.lock.info
@@ -12,6 +12,10 @@
 # Real values, including a subscription id somebody may not want in git.
 terraform.tfvars
 *.auto.tfvars
+
+# The one committed exception: stable baseline vars true for every apply, human or CI,
+# with nothing secret in it. See ci.auto.tfvars itself for why each value is there.
+!ci.auto.tfvars
 
 # Saved plans can contain variable values.
 *.tfplan
