@@ -1,2 +1,3 @@
 pyyaml>=6.0
-fastmcp>=2.10
+# FastMCP 4 defaults to a sessionless protocol; telemetry assumes stable sessions.
+fastmcp>=2.10,<4
