@@ -11,7 +11,7 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # A handful of tests (test_access.py, test_demo_principals.py) check the real
       # demo identities against the real access-policy.yaml, not a fixture, to prove
@@ -24,13 +24,13 @@ jobs:
       # ki-ccl's own availability - see load_real_policy in tests/conftest.py.
       - name: Checkout ki-ccl (for the real-policy tests)
         continue-on-error: true
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ki-group-gmbh/ki-ccl
           token: ${{ secrets.KI_CCL_READ_TOKEN }}
           path: ki-ccl
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 

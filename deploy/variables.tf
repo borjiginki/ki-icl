@@ -202,15 +202,18 @@ variable "allowed_client_cidrs" {
 variable "runner_image" {
   description = <<-EOT
     Full image reference for the self-hosted GitHub Actions runner that publishes
-    ki-ccl's corpus to the Files share. Leave empty until it exists: the runner
-    Container App is not created at all while this is unset (count, not a placeholder
-    image - unlike `image` above, there is nothing useful for an idle runner to do).
+    ki-ccl's corpus to the Files share. Empty means the runner Container App is not
+    created at all (count, not a placeholder image - unlike `image` above, there is
+    nothing useful for an idle runner to do).
 
-      az acr build --registry <acr_name> --image ki-ccl-runner:<sha> deploy/runner
-      terraform apply -var runner_image=<acr_login_server>/ki-ccl-runner:<sha>
+    Set by .github/workflows/deploy.yml, which builds the image on every run and passes
+    the tag only when the repository variable PUBLISH_RUNNER_ENABLED is "true". Do not
+    set it from a local apply: this variable is read on every plan, so the next apply
+    from main would resolve it back to "" and destroy whatever a local one created. See
+    deploy/README.md, "Stage 2: the publish runner", for the order the prerequisites
+    have to land in.
 
-    Pin a digest or a commit sha, never `latest`, for the same review-trail reason as
-    `image`.
+    Always a commit sha, never `latest`, for the same review-trail reason as `image`.
   EOT
   type        = string
   default     = ""

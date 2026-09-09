@@ -35,10 +35,11 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image: ${{ steps.build.outputs.image }}
+      runner_image: ${{ steps.build.outputs.runner_image }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: azure/login@v2
+      - uses: azure/login@v3
         with:
           creds: >-
             {"clientId":"${{ secrets.AZURE_CLIENT_ID }}",
@@ -46,7 +47,7 @@ jobs:
              "subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}",
              "tenantId":"${{ secrets.AZURE_TENANT_ID }}"}
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: "1.6"
 
@@ -62,14 +63,22 @@ jobs:
           az acr build --registry "$ACR" --image "ki-icl:$SHA" ..
           echo "image=$SERVER/ki-icl:$SHA" >> "$GITHUB_OUTPUT"
 
+          # The publish runner's image, built here for the same two reasons the server's
+          # is: layer caching makes it nearly free when deploy/runner/ has not changed,
+          # and the tag terraform is about to reference has to exist in ACR before the
+          # plan can point at it. Building it is not the same as creating the runner -
+          # that is PUBLISH_RUNNER_ENABLED's job, in terraform-plan below.
+          az acr build --registry "$ACR" --image "ki-ccl-runner:$SHA" runner
+          echo "runner_image=$SERVER/ki-ccl-runner:$SHA" >> "$GITHUB_OUTPUT"
+
   terraform-plan:
     name: Terraform plan
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: azure/login@v2
+      - uses: azure/login@v3
         with:
           creds: >-
             {"clientId":"${{ secrets.AZURE_CLIENT_ID }}",
@@ -77,19 +86,33 @@ jobs:
              "subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}",
              "tenantId":"${{ secrets.AZURE_TENANT_ID }}"}
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: "1.6"
 
+      # runner_image has to be passed on every plan, not only on the plan that first
+      # creates the runner. Terraform reconciles against what this run declares, not
+      # against what some earlier run left behind, so a plan that omits it resolves the
+      # variable to its empty default and reads as "destroy the runner" - which is
+      # exactly what would happen to a runner stood up by a one-off local apply. Making
+      # the switch a repository variable keeps the whole lifecycle in this pipeline:
+      # unset or anything but "true" means no runner, and no runner is the honest state
+      # until the Key Vault PAT and the runner identity's three role assignments exist.
+      # See deploy/README.md, "Stage 2: the publish runner".
       - name: terraform plan
         working-directory: deploy
         run: |
           set -euo pipefail
+          runner_image=""
+          if [ "${{ vars.PUBLISH_RUNNER_ENABLED }}" = "true" ]; then
+            runner_image="${{ needs.build-and-push.outputs.runner_image }}"
+          fi
           terraform init -backend-config=backend.hcl -input=false
           terraform plan -input=false -out=tfplan.binary \
-            -var "image=${{ needs.build-and-push.outputs.image }}"
+            -var "image=${{ needs.build-and-push.outputs.image }}" \
+            -var "runner_image=$runner_image"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: tfplan
           path: deploy/tfplan.binary
@@ -101,9 +124,9 @@ jobs:
     runs-on: ubuntu-latest
     environment: azure-infra
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: azure/login@v2
+      - uses: azure/login@v3
         with:
           creds: >-
             {"clientId":"${{ secrets.AZURE_CLIENT_ID }}",
@@ -111,11 +134,11 @@ jobs:
              "subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}",
              "tenantId":"${{ secrets.AZURE_TENANT_ID }}"}
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: "1.6"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: tfplan
           path: deploy

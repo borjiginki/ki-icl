@@ -97,18 +97,20 @@ The Files account has no public endpoint at all - only a private one, inside `ki
 That is what this stage stands up.
 An earlier version of this deployment reached the share by temporarily re-enabling its public network access around each upload, run by hand from a laptop; that workaround is retired, not hidden behind automation - the account's public network access stays off, permanently, and the runner is the only way in.
 
-Build and deploy the runner:
+**The runner is built and applied by the Deploy workflow, never by a local `terraform apply`.**
+A runner stood up locally would be destroyed by the next apply from `main`: that plan resolves `runner_image` to its empty default and reads as "remove the Container App".
+So the switch is the repository variable `PUBLISH_RUNNER_ENABLED`, which [.github/workflows/deploy.yml](../.github/workflows/deploy.yml) passes through on every plan, and the whole lifecycle stays in one pipeline.
 
-```bash
-ACR=$(terraform output -raw acr_name)
-SERVER=$(terraform output -raw acr_login_server)
-SHA=$(git rev-parse --short HEAD)
+The switch exists at all because the runner cannot be created until two things it does not create itself are in place.
+Turning it on early gets a Container App that fails on a Key Vault secret reference it has neither the secret nor the permission for, and a red apply.
+In order:
 
-az acr build --registry "$ACR" --image ki-ccl-runner:"$SHA" deploy/runner
-terraform apply -var "image=$SERVER/ki-icl:<current server tag>" -var "runner_image=$SERVER/ki-ccl-runner:$SHA"
-```
+1. **Merge, and let Deploy apply.** This creates `kiicl-runner-identity` and stops there, because the switch is still off. That identity is what the next step needs a principal to point at.
+2. **Have an admin grant it three role assignments**, out of band, exactly as the app's were (see [When role assignments fail](#when-role-assignments-fail)): `Storage File Data Privileged Contributor` on the Files account, `Key Vault Secrets User` on the vault, and `AcrPull` on the registry. `create_role_assignments` stays `false`, so Terraform attempts none of them.
+3. **Set the PAT** the runner registers with, see [The runner's GitHub PAT](#the-runners-github-pat) below.
+4. **Set `PUBLISH_RUNNER_ENABLED` to `true`** in this repository's variables and re-run Deploy. That is the run that creates the Container App; the runner registers itself against ki-ccl within about a minute of the revision going healthy, and shows up under ki-ccl's Settings, Actions, Runners.
 
-Then, once (or whenever the PAT rotates), set the credential the runner registers itself with — see [The runner's GitHub PAT](#the-runners-github-pat) below — and hand the outputs to ki-ccl as repository variables:
+Then hand the outputs to ki-ccl as repository variables:
 
 ```bash
 terraform output runner_managed_identity_client_id   # -> ki-ccl var RUNNER_IDENTITY_CLIENT_ID
@@ -119,7 +121,9 @@ terraform output files_share_name                       # -> ki-ccl var FILES_SH
 ```
 
 None of the five are secret; they are `vars`, not `secrets`, in ki-ccl's repository settings, the same way `AZURE_CLIENT_ID` etc. are in ki-dev-skills.
-With those set, push a change to `domains/` in ki-ccl (or run `publish.yml` via `workflow_dispatch`) and check the runner's registration and the workflow's own log — that is Stage 2's real verification, not the Terraform apply above.
+With those set, push a change to `domains/` in ki-ccl (or run `publish.yml` via `workflow_dispatch`) and check the runner's registration and the workflow's own log.
+That is Stage 2's real verification, not the apply that created the container.
+Until all five are set the publish job fails at `azure/login`, and until the runner exists it does not fail at all, it simply sits queued forever with nothing to claim it.
 
 The mount itself needs no separate apply: the Container App's environment storage link takes its access key directly from the storage account resource (see the comment on `azurerm_container_app_environment_storage.context` in `app.tf`), not from a variable, so provisioning the runner is the only step here.
 
