@@ -16,12 +16,16 @@ gate treat a new domain as undeployable until somebody decides who reads it.
 Two hard constraints on this module, both load-bearing:
 
 1. **It imports no FastMCP and reads no environment.** That is what preserves
-   `server/artifacts.py`'s no-FastMCP invariant while letting it call in here, what
-   makes this a table of pure functions rather than a scenario, and what lets
-   `scripts/validate_context.py` import `SENSITIVITY_LEVELS` from the same definition
-   the runtime compares against. Two copies of that ladder would drift, which is the
-   problem `scripts/status_header.py` exists to solve. Note the inverted dependency:
-   `scripts/` importing `server/` is acceptable *only* because this module is pure.
+   `server/artifacts.py`'s no-FastMCP invariant while letting it call in here, and what
+   makes this a table of pure functions rather than a scenario. Before the corpus
+   moved to its own repo (ki-ccl), that purity also let `scripts/validate_context.py`
+   import `SENSITIVITY_LEVELS` from this exact definition, so the gate could never
+   accept a value the server would not - "`scripts/` importing `server/` is acceptable
+   only because this module is pure" was the reasoning. The corpus split broke the
+   import; `POLICY_FILENAME` and `SENSITIVITY_LEVELS` below are now a small, explicitly
+   commented, hand-kept mirror in ki-ccl's `scripts/validate_context.py` instead of a
+   shared definition - see the comment there for what that costs and why it is
+   bounded (the runtime loader fails safe on a mismatch, never open).
 2. **Nothing here raises, and no message names a domain, an artifact, a role or a
    subject.** FastMCP returns exception text to the client verbatim unless
    `mask_error_details` is set, so an exception carrying an artifact id would be the
@@ -53,9 +57,10 @@ POLICY_FILENAME = "access-policy.yaml"
 # what, which is why test_the_ladder_order_is_pinned asserts the exact tuple. A fourth
 # level is a decision, not a convenience, in the same sense KNOWN_DOMAINS is.
 #
-# The rationale strings are not decoration: `scripts/validate_context.py` builds its
-# error message out of them, the same way it does for REVIEW_STATES, so an author who
-# picks the wrong level is told what the levels mean rather than just which are legal.
+# The rationale strings are not decoration: ki-ccl's `scripts/validate_context.py`
+# builds its error message out of a mirror of them, the same way it does for
+# REVIEW_STATES, so an author who picks the wrong level is told what the levels mean
+# rather than just which are legal.
 SENSITIVITY_LEVELS: Mapping[str, str] = {
     "internal": "any authenticated KI group colleague may read it",
     "restricted": "only the functions named in the policy: customer names, rates, project health",

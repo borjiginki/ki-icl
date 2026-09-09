@@ -8,14 +8,27 @@ on:
 
 jobs:
   check:
-    name: Validate, package, test
+    name: Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # A handful of tests (test_access.py, test_demo_principals.py) check the real
+      # demo identities against the real access-policy.yaml, not a fixture, to prove
+      # the fail-closed authorization model holds against real data. That file now
+      # lives in ki-ccl. Checked out as a sibling, matching what local dev already
+      # needs for CONTEXT_ROOT (see the Makefile), and read-only: KI_CCL_READ_TOKEN is
+      # a fine-grained PAT scoped to Contents: read on ki-group-gmbh/ki-ccl only.
+      # continue-on-error, not required: if the secret is unset or the checkout
+      # otherwise fails, those tests skip themselves rather than blocking CI on
+      # ki-ccl's own availability - see load_real_policy in tests/conftest.py.
+      - name: Checkout ki-ccl (for the real-policy tests)
+        continue-on-error: true
+        uses: actions/checkout@v4
         with:
-          # package_context.py stamps each artifact with the last commit that touched
-          # its folder, which needs real history rather than a shallow clone.
-          fetch-depth: 0
+          repository: ki-group-gmbh/ki-ccl
+          token: ${{ secrets.KI_CCL_READ_TOKEN }}
+          path: ki-ccl
 
       - uses: actions/setup-python@v5
         with:
@@ -23,11 +36,7 @@ jobs:
 
       - run: pip install -r requirements-dev.txt
 
-      - name: Validate context
-        run: python3 scripts/validate_context.py
-
-      - name: Package context (context.tar.gz + manifest.json)
-        run: python3 scripts/package_context.py
-
       - name: Test
+        env:
+          KI_CCL_ROOT: ${{ github.workspace }}/ki-ccl
         run: python3 -m pytest -q

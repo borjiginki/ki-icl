@@ -1,6 +1,6 @@
 """The context-layer read path: discovery, lookup, and payload construction.
 
-Serves a *packaged* catalog tree, the one `scripts/package_context.py` produces:
+Serves a *packaged* catalog tree, the one ki-ccl's `scripts/package_context.py` produces:
 
     <root>/domains/<domain>/_manifest.json
     <root>/domains/<domain>/<artifact-id>/...

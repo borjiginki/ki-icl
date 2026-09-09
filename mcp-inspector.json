@@ -16,7 +16,7 @@
       "command": ".venv/bin/python",
       "args": ["server/mcp_server.py"],
       "env": {
-        "CONTEXT_ROOT": "dist/staging",
+        "CONTEXT_ROOT": "../ki-ccl/dist/staging",
         "CONTEXT_USAGE_LOG": "logs/usage.jsonl"
       }
     },
@@ -25,7 +25,7 @@
       "command": ".venv/bin/python",
       "args": ["server/mcp_server.py"],
       "env": {
-        "CONTEXT_ROOT": "dist/staging",
+        "CONTEXT_ROOT": "../ki-ccl/dist/staging",
         "CONTEXT_USAGE_LOG": "logs/usage.jsonl",
         "KI_ICL_DEV_PRINCIPAL": "baseline",
         "KI_ICL_ENFORCE": "1"

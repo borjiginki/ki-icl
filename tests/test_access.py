@@ -351,10 +351,10 @@ def test_a_role_with_no_grants_mapping_loads_as_granting_nothing(tmp_path):
 
 def test_the_repos_own_policy_loads_and_grants_the_known_domains(tmp_path):
     """The real file, not a fixture. It is what the server will actually read."""
-    from tests.conftest import REPO_ROOT
+    from tests.conftest import load_real_policy
 
-    policy = access.load_policy(REPO_ROOT, mode=access.Mode.ENFORCE)
-    assert policy.roles, "access-policy.yaml at the repo root must load"
+    policy = load_real_policy()
+    assert policy.roles, "ki-ccl's access-policy.yaml must load"
     granted = {d for grants in policy.roles.values() for d in grants}
     assert "team" in granted and "projects" in granted
 
@@ -362,9 +362,9 @@ def test_the_repos_own_policy_loads_and_grants_the_known_domains(tmp_path):
 def test_the_real_policy_gives_nobody_every_domain_at_the_top_level(tmp_path):
     """No global top level, asserted against the shipped file rather than a fixture.
     Fails the day someone adds an everything-role or a wildcard."""
-    from tests.conftest import REPO_ROOT
+    from tests.conftest import load_real_policy
 
-    policy = access.load_policy(REPO_ROOT, mode=access.Mode.ENFORCE)
+    policy = load_real_policy()
     all_domains = {d for grants in policy.roles.values() for d in grants}
     for role, grants in policy.roles.items():
         reaches_everything = set(grants) == all_domains and all(

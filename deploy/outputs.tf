@@ -29,13 +29,33 @@ output "log_analytics_workspace_id" {
 }
 
 output "files_storage_account_name" {
-  description = "Pass to `make publish` (ACCOUNT=...) to publish domains/ content to the mounted share."
+  description = "Set as ki-ccl's FILES_STORAGE_ACCOUNT repo variable - what publish.yml uploads to and this app mounts."
   value       = azurerm_storage_account.files.name
 }
 
 output "files_share_name" {
-  description = "The share `make publish` uploads to and the app mounts."
+  description = "Set as ki-ccl's FILES_SHARE_NAME repo variable - the share publish.yml uploads to and this app mounts."
   value       = azurerm_storage_share.context.name
+}
+
+output "runner_managed_identity_principal_id" {
+  description = "Grant Storage File Data Privileged Contributor on the Files account, Key Vault Secrets User on the vault, and AcrPull on the registry to this principal, if create_role_assignments is false."
+  value       = azurerm_user_assigned_identity.runner.principal_id
+}
+
+output "runner_managed_identity_client_id" {
+  description = "Set as ki-ccl's RUNNER_IDENTITY_CLIENT_ID repo variable - what publish.yml's azure/login step authenticates as."
+  value       = azurerm_user_assigned_identity.runner.client_id
+}
+
+output "runner_azure_tenant_id" {
+  description = "Set as ki-ccl's AZURE_TENANT_ID repo variable."
+  value       = data.azurerm_client_config.current.tenant_id
+}
+
+output "runner_azure_subscription_id" {
+  description = "Set as ki-ccl's AZURE_SUBSCRIPTION_ID repo variable."
+  value       = var.subscription_id
 }
 
 output "what_is_running" {

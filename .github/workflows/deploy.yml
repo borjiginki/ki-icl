@@ -1,10 +1,15 @@
 name: Deploy
 
-# Every push to main: build the image, publish the corpus if it changed, plan the
-# infrastructure, then pause for a human to approve before anything is actually applied.
-# The image is rebuilt every time rather than only when server/ changes, so the image
-# tag (the commit sha) always has something in ACR for terraform-plan to point at -
-# ACR build layer-caches, so this is cheap even when nothing server-side changed.
+# Every push to main: build the image, plan the infrastructure, then pause for a human
+# to approve before anything is actually applied. The image is rebuilt every time
+# rather than only when server/ changes, so the image tag (the commit sha) always has
+# something in ACR for terraform-plan to point at - ACR build layer-caches, so this is
+# cheap even when nothing server-side changed.
+#
+# The corpus itself is no longer published from here. It moved to ki-ccl
+# (github.com/ki-group-gmbh/ki-ccl), which publishes to the Files share on its own
+# merges to main, from the self-hosted runner defined in deploy/runner.tf. See that
+# repo's publish.yml and deploy/README.md's "Publishing" section.
 on:
   push:
     branches: [main]
@@ -56,57 +61,6 @@ jobs:
           SHA=$(git rev-parse --short HEAD)
           az acr build --registry "$ACR" --image "ki-icl:$SHA" ..
           echo "image=$SERVER/ki-icl:$SHA" >> "$GITHUB_OUTPUT"
-
-  publish-corpus:
-    name: Publish corpus
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Only run if domains/ or access-policy.yaml changed
-        id: changed
-        run: |
-          BEFORE="${{ github.event.before }}"
-          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BEFORE" 2>/dev/null; then
-            BEFORE=$(git rev-parse HEAD~1 2>/dev/null || echo "$(git hash-object -t tree /dev/null)")
-          fi
-          if git diff --name-only "$BEFORE" HEAD | grep -qE '^(domains/|access-policy\.yaml)'; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - uses: azure/login@v2
-        if: steps.changed.outputs.run == 'true'
-        with:
-          creds: >-
-            {"clientId":"${{ secrets.AZURE_CLIENT_ID }}",
-             "clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}",
-             "subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}",
-             "tenantId":"${{ secrets.AZURE_TENANT_ID }}"}
-
-      - uses: hashicorp/setup-terraform@v3
-        if: steps.changed.outputs.run == 'true'
-        with:
-          terraform_version: "1.6"
-
-      - uses: actions/setup-python@v5
-        if: steps.changed.outputs.run == 'true'
-        with:
-          python-version: "3.12"
-
-      - name: make publish
-        if: steps.changed.outputs.run == 'true'
-        run: |
-          set -euo pipefail
-          pip install -r requirements-dev.txt
-          cd deploy
-          terraform init -backend-config=backend.hcl -input=false
-          ACCOUNT=$(terraform output -raw files_storage_account_name)
-          cd ..
-          make publish ACCOUNT="$ACCOUNT"
 
   terraform-plan:
     name: Terraform plan

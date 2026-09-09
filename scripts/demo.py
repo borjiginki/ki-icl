@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Walk the acceptance demo (spec section 1.2, steps 4 to 8) through a real MCP client.
 
-Steps 1 to 3 are the git and CI path, which the POC does not cover: run
-`make package` in their place. Everything from step 4 on is exercised here over
+Steps 1 to 3 are the git and CI path, which the POC does not cover: run `make
+package` in ki-ccl in their place. Everything from step 4 on is exercised here over
 FastMCP's in-memory transport, so this is the same call path a remote client takes.
 
     make demo

@@ -1,9 +1,0 @@
-title: Project status reporting
-kind: methodology
-review: draft
-sensitivity: internal
-description: >-
-  How a project artifact in the `projects` domain is laid out, what the stage and
-  health vocabularies mean, and the rules an update has to follow. Use when
-  starting a project artifact, updating one, or judging whether an answer taken
-  from one can be trusted.

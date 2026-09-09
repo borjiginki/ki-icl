@@ -17,6 +17,8 @@ One private DNS zone with its VNet link, for the Files private endpoint.
 A Log Analytics workspace, a container registry, a Key Vault, one user-assigned managed identity, and the app.
 One storage account, reachable only through its own private endpoint: an Azure Files share holding the domains corpus, mounted into the app from the first apply onward.
 
+A second user-assigned managed identity and, once `runner_image` is set, a second Container App: the self-hosted GitHub Actions runner that lets [ki-ccl](https://github.com/ki-group-gmbh/ki-ccl) publish to the Files share without that account ever needing a public endpoint. See [Stage 2](#stage-2-the-publish-runner) and [runner.tf](runner.tf).
+
 **The app's own ingress is the security boundary of this deployment, not the environment.**
 The environment used to have a private IP instead of a public one, which meant nothing outside a linked VNet could reach it no matter what the app's own ingress said.
 That turned out to matter: `var.external_ingress_enabled` alone could not reach the app from outside `kiicl-vnet`, because the environment itself stood in the way regardless of the app's own setting.
@@ -84,36 +86,59 @@ This also creates the domains corpus's file share, empty until Stage 2 publishes
 
 Check `terraform output what_is_running`. It will say so.
 
-## Stage 2: the corpus, on the file share
+## Stage 2: the publish runner
 
 The share needs to hold a complete, valid tree before Stage 3 ever points this deployment at the real image, because **the server refuses to start if `access-policy.yaml` can't be read from `CONTEXT_ROOT`** (`server/mcp_server.py` exits at boot when the policy has no roles).
 Publish before building the real image, or a revision crash-loops on a share that is either empty or missing the policy file.
 
-**Reaching the share at all needs a workaround right now, and it's worth understanding before running the commands.** The Files account has no public endpoint - only a private one, inside `kiicl-vnet`. Nothing links that VNet to anywhere else yet (see [What this is](#what-this-is)), so no machine outside it, including yours, can reach the share as things stand. `make publish` (below) handles this by opening a narrow, temporary window: it re-enables public access, does the upload, lists the result, snapshots, then disables public access again in a trap - even if a step fails partway. It is a disclosed, deliberate trade against building real VPN or peering connectivity just to run this command occasionally; revisit it if publishing becomes frequent enough for the open window to matter.
+**The corpus itself no longer lives in this repository, and this deployment no longer publishes it.**
+It moved to [ki-ccl](https://github.com/ki-group-gmbh/ki-ccl), which validates, packages and uploads it on its own merges to `main`.
+The Files account has no public endpoint at all - only a private one, inside `kiicl-vnet` - so ki-ccl's `publish.yml` reaches it from a self-hosted GitHub Actions runner that lives inside that VNet, defined here as `azurerm_container_app.runner` in [runner.tf](runner.tf).
+That is what this stage stands up.
+An earlier version of this deployment reached the share by temporarily re-enabling its public network access around each upload, run by hand from a laptop; that workaround is retired, not hidden behind automation - the account's public network access stays off, permanently, and the runner is the only way in.
+
+Build and deploy the runner:
 
 ```bash
-ACCOUNT=$(terraform output -raw files_storage_account_name)
+ACR=$(terraform output -raw acr_name)
+SERVER=$(terraform output -raw acr_login_server)
+SHA=$(git rev-parse --short HEAD)
 
-make publish ACCOUNT="$ACCOUNT"
+az acr build --registry "$ACR" --image ki-ccl-runner:"$SHA" deploy/runner
+terraform apply -var "image=$SERVER/ki-icl:<current server tag>" -var "runner_image=$SERVER/ki-ccl-runner:$SHA"
 ```
 
-The mount itself needs no separate apply: the Container App's environment storage link takes its access key directly from the storage account resource (see the comment on `azurerm_container_app_environment_storage.context` in `app.tf`), not from a variable, so publishing content is the only step here.
-
-`make publish` validates the corpus, packages it — exactly what CI already does on every push — uploads `dist/staging/` (byte-identical to what the mount will serve) to the share, lists what landed so the upload is visible without a second command, and takes a share snapshot.
-That snapshot is this deployment's replacement for the property the image tag used to carry: it cannot answer "which corpus was served on Tuesday" as precisely as a pinned image tag did, but it gives the share's content a point-in-time record, which a plain mount would not otherwise have.
-
-`make publish` resolves the storage account key it uploads with itself, through your own `az login` session, rather than needing the key you just set in the vault — see the comment above the target in the `Makefile` if that fails on authorization.
-
-**Removing an artifact is safe to publish routinely, with no unsafe window.**
-`az storage file upload-batch` only adds and overwrites, it never deletes, but that turns out not to matter for correctness: `make publish` regenerates every domain's manifest fresh on every run, so a removed artifact's id simply stops resolving on the read path the moment the new manifest lands — even before its now-orphaned files are physically deleted from the share.
-
-Actually reclaiming that storage, or fully scrubbing the bytes of something removed, is a separate, deliberately rarer act, wrapped in the same access-window pattern:
+Then, once (or whenever the PAT rotates), set the credential the runner registers itself with — see [The runner's GitHub PAT](#the-runners-github-pat) below — and hand the outputs to ki-ccl as repository variables:
 
 ```bash
-make purge-and-republish ACCOUNT="$ACCOUNT"
+terraform output runner_managed_identity_client_id   # -> ki-ccl var RUNNER_IDENTITY_CLIENT_ID
+terraform output runner_azure_tenant_id               # -> ki-ccl var AZURE_TENANT_ID
+terraform output runner_azure_subscription_id          # -> ki-ccl var AZURE_SUBSCRIPTION_ID
+terraform output files_storage_account_name            # -> ki-ccl var FILES_STORAGE_ACCOUNT
+terraform output files_share_name                       # -> ki-ccl var FILES_SHARE_NAME
 ```
 
-This wipes the share and republishes within the same open window, so there is no gap where the share is both empty and reachable at once - there is still a brief window where it is empty, which is why this is its own command rather than something `publish` does by default. Only run it when you mean to.
+None of the five are secret; they are `vars`, not `secrets`, in ki-ccl's repository settings, the same way `AZURE_CLIENT_ID` etc. are in ki-dev-skills.
+With those set, push a change to `domains/` in ki-ccl (or run `publish.yml` via `workflow_dispatch`) and check the runner's registration and the workflow's own log — that is Stage 2's real verification, not the Terraform apply above.
+
+The mount itself needs no separate apply: the Container App's environment storage link takes its access key directly from the storage account resource (see the comment on `azurerm_container_app_environment_storage.context` in `app.tf`), not from a variable, so provisioning the runner is the only step here.
+
+**Removing an artifact publishes safely, with no unsafe window.**
+`az storage file upload-batch` only adds and overwrites, it never deletes, but that turns out not to matter for correctness: ki-ccl's packager regenerates every domain's manifest fresh on every run, so a removed artifact's id simply stops resolving on the read path the moment the new manifest lands — even before its now-orphaned files are physically deleted from the share.
+
+Actually reclaiming that storage, or fully scrubbing the bytes of something removed, is a separate, deliberately rarer act: `workflow_dispatch` on ki-ccl's `publish.yml` with `purge: true`, which wipes the share and republishes within the same job, on the same runner, rather than as a second local command against a temporarily opened account. Only run it when you mean to.
+
+### The runner's GitHub PAT
+
+The runner mints its own registration token at container start from a fine-grained GitHub PAT, scoped to `ki-group-gmbh/ki-ccl` only, with the **Administration: write** repository permission and a real expiry.
+Set by hand, like the audit key, so it never enters Terraform state:
+
+```bash
+VAULT=$(terraform output -raw key_vault_name)
+az keyvault secret set --vault-name "$VAULT" --name ki-ccl-runner-pat --value "<the PAT>"
+```
+
+Rotation is a real operation on the same clock as the PAT's own expiry: set a new secret value, then restart the runner revision (or wait for its next scheduled restart) so `entrypoint.sh` picks it up. The PAT is read at container start, not per publish, so a rotation with the container left running does nothing until the next restart.
 
 ## Stage 3: build and run the real image
 
@@ -220,12 +245,15 @@ Whether it can do that against a tenant with no dynamic client registration need
 ## CI/CD
 
 `.github/workflows/deploy.yml` runs on every push to `main`: builds and pushes the
-image, publishes the corpus if `domains/` or `access-policy.yaml` changed, then plans
-the infrastructure. It authenticates as a dedicated service principal (Contributor on
-the subscription, four secrets: `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`,
-`AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`), separate from the identity anyone applies
-locally with, and reads/writes the same remote state described above (a fifth secret,
-`TF_STATE_ACCESS_KEY`).
+image, then plans the infrastructure. It authenticates as a dedicated service principal
+(Contributor on the subscription, four secrets: `AZURE_CLIENT_ID`,
+`AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`), separate from the
+identity anyone applies locally with, and reads/writes the same remote state described
+above (a fifth secret, `TF_STATE_ACCESS_KEY`).
+
+Publishing the corpus is no longer part of this pipeline. It happens in
+[ki-ccl](https://github.com/ki-group-gmbh/ki-ccl)'s own `publish.yml`, on that repo's
+merges to `main`, from the runner provisioned in [Stage 2](#stage-2-the-publish-runner).
 
 **Applying is the one step that waits for a human.** The `terraform-apply` job targets
 the `azure-infra` GitHub Environment, which requires approval before it runs - the plan
@@ -259,9 +287,13 @@ Then ask somebody with Owner or User Access Administrator to grant these to the 
 - **Key Vault Secrets User** on the vault, or the audit key cannot be read.
 - **Key Vault Secrets Officer** on the vault for *your own* account, or you cannot set the secret. An RBAC vault refuses its own creator by default, which is the most common way this pattern wastes an hour.
 
-The preconditions on the app refuse to deploy a configuration that would need a role it does not have, rather than letting you discover it as a revision that will not start.
+And, separately, to the principal in `terraform output runner_managed_identity_principal_id` (Stage 2's runner):
 
-Separately, `make publish` (Stage 2) needs *your own* identity to be able to read the Files storage account's key, which role assignments above do not grant — that needs a data-plane-adjacent role such as **Storage Account Contributor** (or Owner) on the files storage account, not on the app's managed identity.
+- **AcrPull** on the registry, or the runner cannot pull its own image.
+- **Key Vault Secrets User** on the vault, or it cannot read its GitHub PAT.
+- **Storage File Data Privileged Contributor** on the Files storage account, or it authenticates to Azure but every upload it attempts is denied.
+
+The preconditions on the app refuse to deploy a configuration that would need a role it does not have, rather than letting you discover it as a revision that will not start.
 
 ## Cost
 

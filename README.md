@@ -4,7 +4,11 @@ The company context layer: facts about KI group, fetchable by id through an MCP 
 
 **This is a proof of concept.**
 It implements the read path from `context-layer-phase1-spec.md` end to end, minus Azure.
-It is not production ready, and the content in `domains/` is placeholder text that no owner has reviewed.
+It is not production ready.
+
+**The corpus itself lives in a separate repository, [ki-ccl](https://github.com/ki-group-gmbh/ki-ccl).**
+This repo is the server and its deployment: the read path, authorization, and the Azure infrastructure that serves `ki-ccl`'s content over MCP.
+Everything below that used to describe editing `domains/` directly now describes `ki-ccl`; see its README for the corpus itself, and [Publishing](#publishing) below for how it reaches this server.
 
 ## What it is for
 
@@ -14,12 +18,13 @@ This tells it *what is true about the company*: methodologies, offerings, guidel
 One sentence: **make a markdown file in a git repository fetchable through the KI MCP, by id, with a version stamp.**
 
 Governed artifacts may be authored manually or generated from a software repository
-with the `generate-project-context` skill. Generation uses the read-only inspector
-(`.venv/bin/python skills/generate-project-context/scripts/inspect_project.py /absolute/path/to/project --pretty`),
-asks a human about consequential facts the repository cannot prove, and requires
-review before writing under `domains/projects/<project-id>/`. It does not execute
-target code or collect/reproduce secrets. Run `make validate && make package` after
-review. The existing exact-lookup guarantee remains unchanged.
+with `ki-ccl`'s `generate-project-context` skill. Generation uses the read-only inspector
+(`.venv/bin/python skills/generate-project-context/scripts/inspect_project.py /absolute/path/to/project --pretty`,
+run from within `ki-ccl`), asks a human about consequential facts the repository cannot
+prove, and requires review before writing under `domains/projects/<project-id>/`. It
+does not execute target code or collect/reproduce secrets. Run `make validate && make
+package` in `ki-ccl` after review. The existing exact-lookup guarantee remains
+unchanged.
 
 The property that matters is that a wrong answer is impossible.
 A lookup is an exact dictionary hit or an honest `not_found`.
@@ -53,8 +58,9 @@ Two of the seven, `company` and `projects`, hold no artifacts yet, and that is t
 An empty domain answers `get_domain_manifest` with an honest empty list, and it gives `report_gap` somewhere correct to put the demand.
 That tool asks an agent to pick a domain "from `list_domains`", so a live-engagement question with no `projects` domain to name would land under a mislabelled one or vanish entirely.
 
-`KNOWN_DOMAINS` in [scripts/validate_context.py](scripts/validate_context.py) is the gate.
-Adding a domain means amending that constant (and the matching grants in [access-policy.yaml](access-policy.yaml)) and saying why in the pull request, because a new domain changes how the whole corpus is organised and every telemetry key written against it.
+`KNOWN_DOMAINS` in `ki-ccl`'s [scripts/validate_context.py](https://github.com/ki-group-gmbh/ki-ccl/blob/main/scripts/validate_context.py) is the gate.
+Adding a domain means amending that constant (and the matching grants in `ki-ccl`'s [access-policy.yaml](https://github.com/ki-group-gmbh/ki-ccl/blob/main/access-policy.yaml)) and saying why in the pull request, because a new domain changes how the whole corpus is organised and every telemetry key written against it.
+`SENSITIVITY_LEVELS` is defined twice by necessity, once here in [server/access.py](server/access.py) and once as a hand-kept mirror in `ki-ccl`'s gate — see the comment at its definition in either file for why.
 
 ### Which domain does an artifact go in
 
@@ -86,7 +92,7 @@ Every project uses the same file layout, and that uniformity is the point: it is
 | `decisions.md` | What was decided and why, and what it cost | when there is one |
 | `timeline.md` | What is due when, and what has slipped | when dates are committed |
 
-`REQUIRED_ARTIFACT_FILES` in [scripts/validate_context.py](scripts/validate_context.py) enforces the required three, as data rather than a per-domain branch so the next domain needing a shape is a dictionary entry.
+`REQUIRED_ARTIFACT_FILES` in `ki-ccl`'s [scripts/validate_context.py](https://github.com/ki-group-gmbh/ki-ccl/blob/main/scripts/validate_context.py) enforces the required three, as data rather than a per-domain branch so the next domain needing a shape is a dictionary entry.
 `decisions.md` and `timeline.md` are deliberately not required: a project in discovery has settled no arguments and committed to no dates, and empty files would be worse than absent ones.
 
 ### Listing projects, and why there is no `list_projects` tool
@@ -107,7 +113,7 @@ So the packager lifts the `status.md` header into the manifest as a `progress` o
 Derived rather than duplicated into `artifact.yaml`, because two copies of a fact drift and `status.md` is the one an engineer actually edits.
 One call now answers which projects are off track, what sits in each stage, and whose status has gone stale.
 `progress` is present only on artifacts that have a `status.md`, so its presence is the check for "does this report progress" and no other domain carries dead keys.
-[scripts/status_header.py](scripts/status_header.py) defines the format once, because the gate and the packager reading it separately would drift.
+`ki-ccl`'s [scripts/status_header.py](https://github.com/ki-group-gmbh/ki-ccl/blob/main/scripts/status_header.py) defines the format once, because the gate and the packager reading it separately would drift.
 
 When the portfolio grows this manifest is what grows with it, since it is O(projects).
 The pressure valve is `closed` and `stopped` projects, which stay readable but should eventually move out of the live listing rather than the tool gaining a filter argument.
@@ -126,7 +132,7 @@ Note the fetch granularity.
 `get_artifact` returns every file in the folder in one call, so the file split serves human editing and precise quoting, not fetch size.
 A project folder with six files returns all six every time, which is the reason to keep each one tight.
 
-The conventions, the stage and health vocabularies, and what an update is meant to cost are in [project-status-reporting](domains/method/project-status-reporting/README.md).
+The conventions, the stage and health vocabularies, and what an update is meant to cost are in [project-status-reporting](https://github.com/ki-group-gmbh/ki-ccl/blob/main/domains/method/project-status-reporting/README.md).
 One thing there is still unresolved and matters before real project data lands: nothing yet fails when a status goes stale.
 Read access is no longer broad, but note what that does and does not buy, in [access control](#access-control): the MCP read path is scoped to the caller, while the repository these files live in is not.
 
@@ -138,52 +144,45 @@ Usage records are keyed on domain plus id, so a rename also splits an artifact's
 
 ```bash
 make install     # .venv + dependencies
-make test        # 165 tests
-make demo        # walk the acceptance demo end to end
+make test        # this repo's own suite (server + auth); some tests need ki-ccl checked
+                  # out as a sibling and skip themselves otherwise - see below
+make demo        # walk the acceptance demo end to end, against CONTEXT_ROOT
 make serve-http  # MCP server on http://127.0.0.1:8000/mcp
 make inspector   # serve, and open MCP Inspector against it
 make usage       # what was looked up, and what was asked for and missed
 ```
 
+`CONTEXT_ROOT` (default `../ki-ccl/dist/staging`) is where every `serve*`/`demo`/`dashboard` target reads its corpus from.
+Check out [ki-ccl](https://github.com/ki-group-gmbh/ki-ccl) as a sibling of this repo and run `make package` there first:
+
+```bash
+git clone git@github.com:ki-group-gmbh/ki-ccl.git ../ki-ccl
+(cd ../ki-ccl && make install && make package)
+make serve-http
+```
+
+A few tests want the real `access-policy.yaml` too, to prove authorization holds against real data rather than only synthetic fixtures (`test_access.py`, `test_demo_principals.py`).
+They read it from that same sibling checkout and skip themselves, cleanly, when it is absent; override the path with `KI_CCL_ROOT`.
+
 ## Layout
 
 ```
-domains/<domain>/                   the content. One folder per domain, one per artifact.
-  domain.yaml                       id + description
-  <artifact-id>/                    an artifact; the folder IS the artifact
-    artifact.yaml                   title, kind, description
-    README.md                       required entry document
-scripts/validate_context.py         the gate. Collects every failure, never stops at the first.
-scripts/package_context.py          tar.gz + per-domain _manifest.json + per-artifact version_id
-scripts/status_header.py            the status.md header format. Defined once; the gate and
-                                    the packager both read it, so they cannot drift.
+server/artifacts.py                 the read path. Lifts into ki-mcp unchanged.
+server/access.py                    authorization: domains as compartments, sensitivity as a ladder.
+server/usage.py                     usage logging middleware. Lifts into ki-mcp.
+server/identity.py                  claims -> Principal, and the only module holding a raw Entra oid.
+server/mcp_server.py                throwaway harness. Replaced by ki-mcp's tool registry.
 scripts/demo.py                     the acceptance demo, over a real MCP client
 scripts/usage_report.py             reads logs/usage.jsonl
-server/artifacts.py                 the read path. Lifts into ki-mcp unchanged.
-server/usage.py                     usage logging middleware. Lifts into ki-mcp.
-server/mcp_server.py                throwaway harness. Replaced by ki-mcp's tool registry.
+scripts/dashboard.py                the usage dashboard
+deploy/                             Terraform: the app, the Files share, the ki-ccl publish runner
 ```
 
-`make package` writes two directories, and the difference matters:
-
-| Directory | Contents | Used by |
-|---|---|---|
-| `dist/context/` | exactly `context.tar.gz` and `manifest.json` | the upload step (`az storage blob upload-batch`) |
-| `dist/staging/` | the servable tree, byte-identical to the extracted archive | local dev (`CONTEXT_ROOT`) |
+The corpus itself (`domains/`, `access-policy.yaml`, the validation gate and packager) lives in [ki-ccl](https://github.com/ki-group-gmbh/ki-ccl) - see its README for that layout.
 
 ## Adding an artifact
 
-1. Pick the domain whose team will own the document, per the routing rule above, then `mkdir domains/<domain>/<kebab-case-id>/`.
-2. Write `artifact.yaml` with `title`, `kind`, `description` and `review`.
-   The `description` is what an agent reads to decide whether to fetch, so write it as a "when to use" signal, not a label.
-   `review` is one of `demo`, `draft` or `approved`, and is required. See below.
-3. Write `README.md`. Supporting files may nest freely, and must be text.
-4. `make validate`, then open a pull request.
-
-Text only: `.md`, `.yaml`, `.yml`, `.json`, `.txt`, `.csv`, 1 MiB per file.
-This is not a style preference.
-Measured on the existing skills catalog, 147 markdown files are 1.73 MB while the binaries beside them are 15.32 MB.
-Repository size risk is entirely a binaries risk, and the allow-list removes it.
+Artifacts live in `ki-ccl`, not here. See [its README](https://github.com/ki-group-gmbh/ki-ccl#adding-an-artifact).
 
 ## `review`: whether anyone stands behind it
 
@@ -365,7 +364,7 @@ To run the server alone, `make serve-http`, then point a client at `http://127.0
 Reads are scoped to the caller's identity, taken from an Entra-issued JWT.
 Two axes, and they are not interchangeable:
 
-- **Domains are compartments.** A role reads a domain or it does not. Grants live in [access-policy.yaml](access-policy.yaml), keyed on Entra **app role** values rather than group object ids, so the file reads as English in a pull request and no IdP identifier ships with the corpus.
+- **Domains are compartments.** A role reads a domain or it does not. Grants live in `ki-ccl`'s [access-policy.yaml](https://github.com/ki-group-gmbh/ki-ccl/blob/main/access-policy.yaml), keyed on Entra **app role** values rather than group object ids, so the file reads as English in a pull request and no IdP identifier ships with the corpus.
 - **`sensitivity` is a ladder**, compared only within a domain. Every artifact declares one of `internal`, `restricted` or `confidential`, required and gated the same way `review` is. A principal's level for a domain is the maximum across their roles, so gaining a role never removes access.
 
 There is deliberately no wildcard and no global top level.
@@ -402,7 +401,7 @@ Because `StaticTokenVerifier` passes its claims through unchanged, the demo toke
 Engineering does not block on these, but production does.
 
 - **Art. 6(1)(f)** legitimate interests, with a written balancing test. Consent is not available in an employment relationship. German employee data is additionally governed by §26 BDSG and Art. 88 GDPR, and the DPO confirms the provision and its numbering rather than this file.
-- **§87(1) no. 6 BetrVG co-determination.** A per-person read log over `team` content (personnel and staffing profiles) is objectively *suitable for* monitoring employee behaviour, and suitability is assessed regardless of intent. Betriebsrat consultation, in practice a Betriebsvereinbarung, comes before the log has data in it. [project-status-reporting](domains/method/project-status-reporting/README.md#progress-belongs-to-the-project-never-to-a-person) already reasoned about this same boundary for status reporting, and the consultation goes better carrying that reasoning.
+- **§87(1) no. 6 BetrVG co-determination.** A per-person read log over `team` content (personnel and staffing profiles) is objectively *suitable for* monitoring employee behaviour, and suitability is assessed regardless of intent. Betriebsrat consultation, in practice a Betriebsvereinbarung, comes before the log has data in it. [project-status-reporting](https://github.com/ki-group-gmbh/ki-ccl/blob/main/domains/method/project-status-reporting/README.md#progress-belongs-to-the-project-never-to-a-person) already reasoned about this same boundary for status reporting, and the consultation goes better carrying that reasoning.
 - **The control that makes the purpose limitation real: no tool here aggregates by actor.** Neither the dashboard nor `make usage` has a per-actor ranking, volume chart, or actor dimension, and `test_no_aggregation_groups_by_actor` fails if one is added. This log answers "did access control hold", never "how much did this person read".
 - **Retention 90 days**, enforced where the store is: production sets `CONTEXT_USAGE_LOG=""` so Log Analytics is the only store, with workspace retention set there and the workspace pinned to an EU region. Token validation is local and the JWKS fetch carries only public signing keys, so there is no Art. 44 transfer in the auth path.
 - **Not an Annex III high-risk AI system**, and the reason is worth keeping: no automated decision about a person, no profile, no ranking or score. Any future feature that ranks, scores or compares people changes that classification.
@@ -416,10 +415,17 @@ Target is the KI-PER Data Platform Sandbox, resource group `ki-icl-sandbox`, Ger
 The shape, and the two things worth knowing before reading the rest:
 
 - **Ingress is internal.** The environment gets a private IP, so only a VNet linked to its private DNS zone can reach it. That is what makes running with `KI_ICL_AUTH=off` defensible at first: the network is the control. It also means claude.ai and Claude Desktop cannot reach it, only Claude Code from inside that network.
-- **The corpus lives on a mounted, privately-reachable Azure Files share**, published separately from the image (`make publish`) and validated by the same gate CI runs before it lands there. This used to be baked into the image, which made the image tag answer "which corpus was served on Tuesday"; that property now belongs to a share snapshot taken at publish time instead, traded for not needing a rebuild on every content edit.
+- **The corpus lives on a mounted, privately-reachable Azure Files share**, published separately from the image and validated by the same gate CI runs before it lands there. This used to be baked into the image, which made the image tag answer "which corpus was served on Tuesday"; that property now belongs to a share snapshot taken at publish time instead, traded for not needing a rebuild on every content edit.
 
-Five stages, each of which leaves something working: infrastructure with a placeholder image, then the corpus published to the share, then the real image with grants observed rather than enforced, then the audit key, then Entra.
+Five stages, each of which leaves something working: infrastructure with a placeholder image, then the publish runner, then the real image with grants observed rather than enforced, then the audit key, then Entra.
 The fourth and fifth are where personal data starts being processed, and the runbook says so at the point where it happens.
+
+## Publishing
+
+The corpus reaches the Files share with no human in the loop, on every merge to `ki-ccl`'s `main`: [ki-ccl](https://github.com/ki-group-gmbh/ki-ccl)'s `publish.yml` validates and packages the content, then uploads it from a self-hosted GitHub Actions runner that lives inside `kiicl-vnet` (`deploy/runner.tf`), authenticating as that runner's own managed identity.
+There is no public network path to the share at all, at any point - see [deploy/README.md](deploy/README.md#stage-2-the-publish-runner) for how the runner is provisioned and credentialed.
+
+A pull request against `ki-ccl` runs the same validate-and-package steps as a dry run and never uploads, so a broken corpus fails before it merges.
 
 ## What this POC leaves out
 
@@ -427,9 +433,9 @@ Everything here is deliberate, and each item is cheap to add once it is wanted.
 
 | Not built | Why, and what it costs |
 |---|---|
-| Azure blob fetch, ETag guard, cache swap | Parametrizing `ki-mcp/server/utils/skills_source.py`, which already works in production. Nothing new to design, but now it has a hard constraint: the cache must hold **raw** manifests, because a cached filtered one served to a second caller is a cross-principal disclosure. The deployment sidesteps this entirely by baking the corpus into the image, so a content change is a new revision rather than a cache invalidation. |
-| `publish-context.yml` (upload + `/refresh`) | Blocked on a federated credential for this repo on the publisher Entra app. Copy `ki-dev-skills/.github/workflows/publish-skills.yml` and change four things. |
+| Azure blob fetch, ETag guard, cache swap | Parametrizing `ki-mcp/server/utils/skills_source.py`, which already works in production and is the pattern `ki-dev-skills` uses to publish to `ki-mcp`. Nothing new to design, but now it has a hard constraint: the cache must hold **raw** manifests, because a cached filtered one served to a second caller is a cross-principal disclosure. This deployment sidesteps it entirely by mounting a Files share instead, so a content change is a share update rather than a cache invalidation - see [Publishing](#publishing). |
 | Registration in ki-mcp | Move `server/artifacts.py` to `ki-mcp/server/utils/artifacts.py` and the three tool functions to `server/tools/artifact_tools.py`. |
+| A test proving `ki-ccl`'s packaged output is servable by this server's real read path | Used to be one test here, packaging this repo's own content and feeding it straight into `server/access.py` and `server/artifacts.py`. Splitting the corpus into `ki-ccl` broke that - it needs both repos in one process. `test_access.py` and `test_demo_principals.py` keep the authorization half of this (the real policy, checked out from `ki-ccl` as a sibling); the packaging half is `ki-ccl`'s own `test_this_repos_own_content_packages`. What is not proven anywhere any more: that the two halves compose. A true end-to-end check would hit the deployed server after a real publish. |
 | Ownership, `CODEOWNERS`, approval routing | Deferred by decision. `owner` is already served as `null` at both levels, so adding it is data, not a schema change. The routing rule above is chosen to agree with it when it lands. |
 | A fixed `kind` vocabulary | Issue #20 OQ-3, undecided. `kind` is a non-empty free string, and two values are in use: `guideline` and `methodology`. Seven domains will pull it in more directions, so it is worth settling soon, but generalising before there is content to generalise from would be the wrong order. |
 | Search, similarity, resolution from task context | Deferred on a stated trigger. Adding it would break the property in the first section. |
