@@ -4,6 +4,11 @@ The fixture is the real `config/demo_principals.yaml`, not a copy of it. A row t
 stops making sense fails this suite rather than rotting quietly, and the structural
 test at the bottom is what stops somebody tidying away the row the fail-closed proof
 rests on.
+
+The grant table it is checked against is the real `access-policy.yaml` too, read from
+a sibling ki-ccl checkout now that the corpus lives there - see `load_real_policy` in
+conftest.py. Tests in the "what each row proves" section skip, rather than pass on
+stale or synthetic data, when that checkout is not present.
 """
 
 from __future__ import annotations
@@ -11,10 +16,9 @@ from __future__ import annotations
 import pytest
 
 from server import access, demo_principals, identity
-from tests.conftest import REPO_ROOT
+from tests.conftest import REPO_ROOT, load_real_policy
 
 REAL_TABLE = REPO_ROOT / "config" / "demo_principals.yaml"
-POLICY = access.load_policy(REPO_ROOT, mode=access.Mode.ENFORCE)
 
 
 def row(sensitivity: str) -> dict:
@@ -99,10 +103,33 @@ def test_the_demo_table_lives_outside_the_corpus_so_it_can_never_be_packaged():
 
 
 def test_the_demo_table_is_absent_from_a_packaged_tree(tmp_path):
-    from scripts.package_context import build
+    """`package_context.py` (now in ki-ccl) walks `domains/` and copies the policy by
+    name; it has no path by which this repo's file could reach an archive. Packaging
+    runs in a subprocess against the sibling checkout, rather than importing its
+    `scripts` package in-process, which would collide with this repo's own `scripts`
+    package of the same name."""
+    from tests.conftest import CCL_ROOT
+
+    if not (CCL_ROOT / "scripts" / "package_context.py").is_file():
+        pytest.skip(f"no ki-ccl checkout at {CCL_ROOT} (set KI_CCL_ROOT to override)")
+
+    import subprocess
+    import sys
 
     out, stage = tmp_path / "dist", tmp_path / "stage"
-    build(REPO_ROOT, out, stage)
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); "
+            "from scripts.package_context import build; "
+            "build(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]))",
+            str(CCL_ROOT),
+            str(out),
+            str(stage),
+        ],
+        check=True,
+    )
 
     assert not list(stage.rglob("demo_principals.yaml"))
     assert not list(out.rglob("demo_principals.yaml"))
@@ -114,48 +141,53 @@ def test_the_demo_table_is_absent_from_a_packaged_tree(tmp_path):
 def test_the_broad_principal_reads_widely_and_still_not_personnel_material():
     """The proof there is no global top level. Fails the day somebody adds a wildcard or
     an everything-role to the policy."""
+    policy = load_real_policy()
     broad = principal_named("broad")
 
-    assert access.may_read_row(POLICY, broad, "projects", row("restricted"))
-    assert access.may_read_row(POLICY, broad, "finance", row("restricted"))
-    assert not access.may_read_row(POLICY, broad, "hr", row("confidential"))
+    assert access.may_read_row(policy, broad, "projects", row("restricted"))
+    assert access.may_read_row(policy, broad, "case-studies", row("restricted"))
+    assert not access.may_read_row(policy, broad, "team", row("confidential"))
 
 
 def test_the_delivery_principal_is_raised_in_its_own_compartments_only():
+    policy = load_real_policy()
     delivery = principal_named("delivery")
 
-    assert access.may_read_row(POLICY, delivery, "projects", row("restricted"))
-    assert not access.may_read_row(POLICY, delivery, "finance", row("restricted"))
-    assert access.may_read_row(POLICY, delivery, "finance", row("internal"))
+    assert access.may_read_row(policy, delivery, "projects", row("restricted"))
+    assert not access.may_read_row(policy, delivery, "offerings", row("restricted"))
+    assert access.may_read_row(policy, delivery, "offerings", row("internal"))
 
 
 def test_the_people_principal_is_the_only_one_that_reaches_personnel_material():
+    policy = load_real_policy()
     people = principal_named("people")
 
-    assert access.may_read_row(POLICY, people, "hr", row("confidential"))
+    assert access.may_read_row(policy, people, "team", row("confidential"))
     for other in ("broad", "delivery", "baseline"):
-        assert not access.may_read_row(POLICY, principal_named(other), "hr", row("confidential"))
+        assert not access.may_read_row(policy, principal_named(other), "team", row("confidential"))
 
 
 def test_the_baseline_principal_sees_every_domain_at_internal_and_no_higher():
+    policy = load_real_policy()
     baseline = principal_named("baseline")
-    granted = {d for grants in POLICY.roles.values() for d in grants}
+    granted = {d for grants in policy.roles.values() for d in grants}
 
     for domain in granted:
-        assert access.may_read_domain(POLICY, baseline, domain), domain
-        assert access.may_read_row(POLICY, baseline, domain, row("internal")), domain
-        assert not access.may_read_row(POLICY, baseline, domain, row("restricted")), domain
+        assert access.may_read_domain(policy, baseline, domain), domain
+        assert access.may_read_row(policy, baseline, domain, row("internal")), domain
+        assert not access.may_read_row(policy, baseline, domain, row("restricted")), domain
 
 
 def test_the_no_grants_principal_is_authenticated_and_reads_nothing():
     """The fail-closed proof, and the reason the row exists. A valid token is not an
     authorization."""
+    policy = load_real_policy()
     nobody = principal_named("no-grants")
 
     assert nobody.authenticated
     assert nobody.roles == frozenset()
-    granted = {d for grants in POLICY.roles.values() for d in grants}
-    assert not any(access.may_read_domain(POLICY, nobody, d) for d in granted)
+    granted = {d for grants in policy.roles.values() for d in grants}
+    assert not any(access.may_read_domain(policy, nobody, d) for d in granted)
 
 
 def test_the_expired_row_is_expired_so_the_401_path_needs_no_crypto():
@@ -176,15 +208,16 @@ def test_every_row_proves_something_distinct():
     Asserted as four distinguishable grant shapes rather than by naming ids, so
     renaming a row is fine and deleting the *coverage* is not.
     """
+    policy = load_real_policy()
     table = demo_principals.load(REAL_TABLE)
     shapes = set()
-    granted = {d for grants in POLICY.roles.values() for d in grants}
+    granted = {d for grants in policy.roles.values() for d in grants}
 
     for claims in table.values():
         p = identity.principal_from_claims(claims, source="demo")
-        readable = {d for d in granted if access.may_read_domain(POLICY, p, d)}
-        raised = {d for d in granted if access.may_read_row(POLICY, p, d, row("restricted"))}
-        top = {d for d in granted if access.may_read_row(POLICY, p, d, row("confidential"))}
+        readable = {d for d in granted if access.may_read_domain(policy, p, d)}
+        raised = {d for d in granted if access.may_read_row(policy, p, d, row("restricted"))}
+        top = {d for d in granted if access.may_read_row(policy, p, d, row("confidential"))}
         if not readable:
             shapes.add("nothing")
         elif top:

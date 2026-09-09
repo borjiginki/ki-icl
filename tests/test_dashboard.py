@@ -357,13 +357,37 @@ def test_the_dashboard_serves_a_live_catalog_when_run_as_a_script(tmp_path: Path
     `server.*` import inside `live_catalog` fails and is swallowed by its own
     fallback. Nothing in-process catches that, because pytest puts the repo root on
     the path itself. Only launching it the way the Makefile does will.
+
+    Needs a real packaged tree with at least one artifact in it - domains/ moved to
+    ki-ccl, so this reads dist/staging from a sibling checkout, packaged on the fly,
+    and skips cleanly when that checkout is not present. See load_real_policy in
+    conftest.py for the same pattern.
     """
     import socket
     import subprocess
     import time
     import urllib.request
 
+    from tests.conftest import CCL_ROOT
+
+    if not (CCL_ROOT / "scripts" / "package_context.py").is_file():
+        pytest.skip(f"no ki-ccl checkout at {CCL_ROOT} (set KI_CCL_ROOT to override)")
+
     repo = Path(__file__).resolve().parent.parent
+    staging = tmp_path / "staging"
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); "
+            "from scripts.package_context import build; "
+            "build(Path(sys.argv[1]), Path(sys.argv[2]) / 'out', Path(sys.argv[2]))",
+            str(CCL_ROOT),
+            str(staging),
+        ],
+        check=True,
+    )
+
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
@@ -373,7 +397,7 @@ def test_the_dashboard_serves_a_live_catalog_when_run_as_a_script(tmp_path: Path
     proc = subprocess.Popen(
         [sys.executable, str(repo / "scripts" / "dashboard.py")],
         env={**os.environ, "DASHBOARD_PORT": str(port),
-             "CONTEXT_ROOT": str(repo / "dist" / "staging"),
+             "CONTEXT_ROOT": str(staging),
              "CONTEXT_USAGE_LOG": str(log),
              "CONTEXT_CURATION": str(tmp_path / "curation.json"),
              "NO_BROWSER": "1"},

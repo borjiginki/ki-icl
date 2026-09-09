@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -11,6 +12,24 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
+
+# domains/ and access-policy.yaml moved to ki-ccl (github.com/ki-group-gmbh/ki-ccl).
+# A few tests still want the *real* shipped policy, not a fixture, to prove the fail-
+# closed authorization model holds against real data rather than only against
+# synthetic cases - see test_access.py and test_demo_principals.py. Those tests read
+# it from a sibling checkout, which local dev already needs for CONTEXT_ROOT (see the
+# Makefile), and which ci.yml checks out alongside this repo for exactly this reason.
+# Skip rather than fail when it is absent, so this repo's suite still runs standalone.
+CCL_ROOT = Path(os.environ.get("KI_CCL_ROOT", REPO_ROOT.parent / "ki-ccl"))
+
+
+def load_real_policy():
+    """The real access-policy.yaml from the sibling ki-ccl checkout, or a skip."""
+    from server import access
+
+    if not (CCL_ROOT / "access-policy.yaml").is_file():
+        pytest.skip(f"no ki-ccl checkout at {CCL_ROOT} (set KI_CCL_ROOT to override)")
+    return access.load_policy(CCL_ROOT, mode=access.Mode.ENFORCE)
 
 
 def write_artifact(domain_dir: Path, artifact_id: str, **files: str) -> None:
@@ -33,17 +52,16 @@ roles:
     description: Any authenticated colleague.
     grants:
       company: internal
-      finance: internal
-      hr: internal
+      method: internal
+      offerings: internal
+      case-studies: internal
+      team: internal
       marketing: internal
       projects: internal
-      sales: internal
-      value-creation: internal
-      value-delivery: internal
   ctx.people:
     description: HR and the works-council contact.
     grants:
-      hr: confidential
+      team: confidential
 """
 
 
@@ -151,37 +169,6 @@ def artifacts(catalog: Path, monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(module, "ARTIFACTS_ROOT", catalog)
     return module
-
-
-@pytest.fixture
-def source_tree(tmp_path: Path) -> Path:
-    """An unpackaged content repo: domain.yaml + artifact folders, no _manifest.json."""
-    company = tmp_path / "domains" / "company"
-    company.mkdir(parents=True)
-    (company / "domain.yaml").write_text(
-        "id: company\ndescription: How we work and what we offer.\n", encoding="utf-8"
-    )
-    write_artifact(
-        company,
-        "expense-policy",
-        artifact__yaml=(
-            "title: Expense policy\nkind: guideline\nreview: draft\n"
-            "sensitivity: internal\ndescription: What we reimburse.\n"
-        ),
-        README__md="# Expense policy\n",
-    )
-    write_artifact(
-        company,
-        "discovery-workshop",
-        artifact__yaml=(
-            "title: Discovery workshop\nkind: methodology\nreview: draft\n"
-            "sensitivity: internal\ndescription: How we run discovery.\nclass: functional\n"
-        ),
-        README__md="# Discovery workshop\n",
-        agenda__md="# Agenda\n",
-    )
-    write_policy(tmp_path)
-    return tmp_path
 
 
 @pytest.fixture(autouse=True)

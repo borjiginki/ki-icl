@@ -1,13 +1,23 @@
 name: Deploy
 
-# Every push to main: build the image, publish the corpus if it changed, plan the
-# infrastructure, then pause for a human to approve before anything is actually applied.
-# The image is rebuilt every time rather than only when server/ changes, so the image
-# tag (the commit sha) always has something in ACR for terraform-plan to point at -
-# ACR build layer-caches, so this is cheap even when nothing server-side changed.
+# Every push to main: build the image, plan the infrastructure, then pause for a human
+# to approve before anything is actually applied. The image is rebuilt every time
+# rather than only when server/ changes, so the image tag (the commit sha) always has
+# something in ACR for terraform-plan to point at - ACR build layer-caches, so this is
+# cheap even when nothing server-side changed.
+#
+# The corpus itself is no longer published from here. It moved to ki-ccl
+# (github.com/ki-group-gmbh/ki-ccl), which publishes to the Files share on its own
+# merges to main, from the self-hosted runner defined in deploy/runner.tf. See that
+# repo's publish.yml and deploy/README.md's "Publishing" section.
 on:
   push:
     branches: [main]
+  # Stage 2 of deploy/README.md turns the publish runner on by flipping the repository
+  # variable PUBLISH_RUNNER_ENABLED, which is read at plan time rather than committed
+  # anywhere. Without a manual trigger, acting on that flip would mean pushing an empty
+  # commit to main just to make the pipeline re-read a variable that already changed.
+  workflow_dispatch:
 
 concurrency:
   group: deploy-main
@@ -30,10 +40,11 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image: ${{ steps.build.outputs.image }}
+      runner_image: ${{ steps.build.outputs.runner_image }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: azure/login@v2
+      - uses: azure/login@v3
         with:
           creds: >-
             {"clientId":"${{ secrets.AZURE_CLIENT_ID }}",
@@ -41,7 +52,7 @@ jobs:
              "subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}",
              "tenantId":"${{ secrets.AZURE_TENANT_ID }}"}
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: "1.6"
 
@@ -57,65 +68,22 @@ jobs:
           az acr build --registry "$ACR" --image "ki-icl:$SHA" ..
           echo "image=$SERVER/ki-icl:$SHA" >> "$GITHUB_OUTPUT"
 
-  publish-corpus:
-    name: Publish corpus
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Only run if domains/ or access-policy.yaml changed
-        id: changed
-        run: |
-          BEFORE="${{ github.event.before }}"
-          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BEFORE" 2>/dev/null; then
-            BEFORE=$(git rev-parse HEAD~1 2>/dev/null || echo "$(git hash-object -t tree /dev/null)")
-          fi
-          if git diff --name-only "$BEFORE" HEAD | grep -qE '^(domains/|access-policy\.yaml)'; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - uses: azure/login@v2
-        if: steps.changed.outputs.run == 'true'
-        with:
-          creds: >-
-            {"clientId":"${{ secrets.AZURE_CLIENT_ID }}",
-             "clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}",
-             "subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}",
-             "tenantId":"${{ secrets.AZURE_TENANT_ID }}"}
-
-      - uses: hashicorp/setup-terraform@v3
-        if: steps.changed.outputs.run == 'true'
-        with:
-          terraform_version: "1.6"
-
-      - uses: actions/setup-python@v5
-        if: steps.changed.outputs.run == 'true'
-        with:
-          python-version: "3.12"
-
-      - name: make publish
-        if: steps.changed.outputs.run == 'true'
-        run: |
-          set -euo pipefail
-          pip install -r requirements-dev.txt
-          cd deploy
-          terraform init -backend-config=backend.hcl -input=false
-          ACCOUNT=$(terraform output -raw files_storage_account_name)
-          cd ..
-          make publish ACCOUNT="$ACCOUNT"
+          # The publish runner's image, built here for the same two reasons the server's
+          # is: layer caching makes it nearly free when deploy/runner/ has not changed,
+          # and the tag terraform is about to reference has to exist in ACR before the
+          # plan can point at it. Building it is not the same as creating the runner -
+          # that is PUBLISH_RUNNER_ENABLED's job, in terraform-plan below.
+          az acr build --registry "$ACR" --image "ki-ccl-runner:$SHA" runner
+          echo "runner_image=$SERVER/ki-ccl-runner:$SHA" >> "$GITHUB_OUTPUT"
 
   terraform-plan:
     name: Terraform plan
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: azure/login@v2
+      - uses: azure/login@v3
         with:
           creds: >-
             {"clientId":"${{ secrets.AZURE_CLIENT_ID }}",
@@ -123,19 +91,33 @@ jobs:
              "subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}",
              "tenantId":"${{ secrets.AZURE_TENANT_ID }}"}
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: "1.6"
 
+      # runner_image has to be passed on every plan, not only on the plan that first
+      # creates the runner. Terraform reconciles against what this run declares, not
+      # against what some earlier run left behind, so a plan that omits it resolves the
+      # variable to its empty default and reads as "destroy the runner" - which is
+      # exactly what would happen to a runner stood up by a one-off local apply. Making
+      # the switch a repository variable keeps the whole lifecycle in this pipeline:
+      # unset or anything but "true" means no runner, and no runner is the honest state
+      # until the Key Vault PAT and the runner identity's three role assignments exist.
+      # See deploy/README.md, "Stage 2: the publish runner".
       - name: terraform plan
         working-directory: deploy
         run: |
           set -euo pipefail
+          runner_image=""
+          if [ "${{ vars.PUBLISH_RUNNER_ENABLED }}" = "true" ]; then
+            runner_image="${{ needs.build-and-push.outputs.runner_image }}"
+          fi
           terraform init -backend-config=backend.hcl -input=false
           terraform plan -input=false -out=tfplan.binary \
-            -var "image=${{ needs.build-and-push.outputs.image }}"
+            -var "image=${{ needs.build-and-push.outputs.image }}" \
+            -var "runner_image=$runner_image"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: tfplan
           path: deploy/tfplan.binary
@@ -147,9 +129,9 @@ jobs:
     runs-on: ubuntu-latest
     environment: azure-infra
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: azure/login@v2
+      - uses: azure/login@v3
         with:
           creds: >-
             {"clientId":"${{ secrets.AZURE_CLIENT_ID }}",
@@ -157,11 +139,11 @@ jobs:
              "subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}",
              "tenantId":"${{ secrets.AZURE_TENANT_ID }}"}
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: "1.6"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: tfplan
           path: deploy

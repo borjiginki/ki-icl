@@ -7,8 +7,6 @@ __pycache__/
 *.pyc
 .pytest_cache/
 dist/
-domains/
-access-policy.yaml
 logs/
 deploy/.terraform/
 deploy/*.tfstate

@@ -57,13 +57,12 @@ resource "azurerm_private_dns_zone_virtual_network_link" "files" {
 }
 
 # Judgment call, reversible: a `Microsoft.Storage` service endpoint on the existing
-# infrastructure subnet plus a storage firewall rule would also work, would need no new
-# subnet or DNS zone, and would not require whoever runs `make publish` to be on the VPN.
-# The private endpoint is chosen instead to match this deployment's one existing
-# security boundary ("no public ingress anywhere"), and because publishing content from
-# inside the same VNet a person already needs to reach the server from is a consistent
-# story rather than a second one. Reconsider this specifically if publishing from
-# outside the VPN turns out to matter in practice.
+# infrastructure subnet plus a storage firewall rule would also work, and would need no
+# new subnet or DNS zone. The private endpoint is chosen instead to match this
+# deployment's one existing security boundary ("no public ingress anywhere"), and
+# because publishing content from inside the same VNet a person already needs to reach
+# the server from - now via the runner in runner.tf, rather than a person on a VPN - is
+# a consistent story rather than a second one.
 resource "azurerm_private_endpoint" "files" {
   name                = "${var.name_prefix}-files-pe"
   location            = azurerm_resource_group.this.location

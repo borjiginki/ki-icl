@@ -67,12 +67,12 @@ differ, this file changes rather than ki-mcp's: history cannot be rewritten.
 This log answers "did access control hold". It does not answer "how much did this
 person read", and no tool in this repo aggregates by actor, enforced by
 `test_no_aggregation_groups_by_actor`. That is not decoration: a per-person read log
-over `hr` and `finance` content is objectively suitable for monitoring employee
-behaviour, which triggers §87(1) no. 6 BetrVG co-determination regardless of intent,
-and the absence of per-person evaluation is also what keeps this outside Annex III of
-the AI Act. `domains/projects/dhl-cbs/team.md` refuses to create such a record as a
-side effect of status reporting; the same reasoning applies here, in the one place that
-does attach a record to a person.
+over `team` content is objectively suitable for monitoring employee behaviour, which
+triggers §87(1) no. 6 BetrVG co-determination regardless of intent, and the absence of
+per-person evaluation is also what keeps this outside Annex III of the AI Act.
+`domains/method/project-status-reporting/README.md` refuses to create such a record as
+a side effect of status reporting; the same reasoning applies here, in the one place
+that does attach a record to a person.
 
 Under stdio there is no token and no principal, and that is honest rather than a gap: a
 subprocess the client spawns, whose stdin it owns, running as the invoking user, is

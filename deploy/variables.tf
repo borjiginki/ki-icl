@@ -197,6 +197,51 @@ variable "allowed_client_cidrs" {
   default = []
 }
 
+# --- the ki-ccl publish runner -----------------------------------------------
+
+variable "runner_image" {
+  description = <<-EOT
+    Full image reference for the self-hosted GitHub Actions runner that publishes
+    ki-ccl's corpus to the Files share. Empty means the runner Container App is not
+    created at all (count, not a placeholder image - unlike `image` above, there is
+    nothing useful for an idle runner to do).
+
+    Set by .github/workflows/deploy.yml, which builds the image on every run and passes
+    the tag only when the repository variable PUBLISH_RUNNER_ENABLED is "true". Do not
+    set it from a local apply: this variable is read on every plan, so the next apply
+    from main would resolve it back to "" and destroy whatever a local one created. See
+    deploy/README.md, "Stage 2: the publish runner", for the order the prerequisites
+    have to land in.
+
+    Always a commit sha, never `latest`, for the same review-trail reason as `image`.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "runner_github_repo" {
+  description = "owner/repo the runner registers itself against. Repo-scoped rather than org-scoped, so it can never pick up a workflow job from any other repository."
+  type        = string
+  default     = "ki-group-gmbh/ki-ccl"
+}
+
+variable "runner_labels" {
+  description = "Comma-separated labels the runner registers under. ki-ccl's publish.yml targets this exact label in `runs-on`, so changing it here means changing it there too."
+  type        = string
+  default     = "ki-ccl-publish"
+}
+
+variable "runner_github_pat_secret_name" {
+  description = <<-EOT
+    Name of the Key Vault secret holding the fine-grained GitHub PAT the runner uses to
+    mint its own registration token at startup (Administration: write, scoped to
+    runner_github_repo only, with an expiry). Set out of band so the value never enters
+    Terraform state - same pattern as audit_key_secret_name.
+  EOT
+  type        = string
+  default     = "ki-ccl-runner-pat"
+}
+
 variable "tags" {
   description = "Applied to every resource."
   type        = map(string)

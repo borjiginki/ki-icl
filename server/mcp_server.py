@@ -358,7 +358,7 @@ def refuse_unsafe_start(*, http: bool, host: str) -> None:
     if not access.load_policy(artifacts.ARTIFACTS_ROOT, mode=access.Mode.ENFORCE).roles:
         raise SystemExit(
             f"No usable {access.POLICY_FILENAME} at {artifacts.ARTIFACTS_ROOT}. Every "
-            f"read would be refused. Run `make package`, or check CONTEXT_ROOT."
+            f"read would be refused. Run `make package` in ki-ccl, or check CONTEXT_ROOT."
         )
     if mode == "entra" and identity.audit_key_from_env() is None:
         if os.environ.get("KI_ICL_AUDIT_REQUIRED", "").strip() == "1":
