@@ -227,13 +227,17 @@ terraform output mcp_url
 
 Publicly resolvable now that the environment's load balancer is public (see [What this is](#what-this-is)), but reachable only when `external_ingress_enabled = true`, and only from an IP listed in `allowed_client_cidrs`:
 
+Both are declared in this repository's Actions settings rather than applied locally, because a local apply is undone by the next merge to `main` (see [CI/CD](#cicd) for what that cost):
+
 ```bash
-terraform apply \
-  -var external_ingress_enabled=true \
-  -var 'allowed_client_cidrs=[{name="<you>", cidr="<your-public-ip>/32", description="<why>"}]'
+gh variable set EXTERNAL_INGRESS_ENABLED --body true
+gh secret set ALLOWED_CLIENT_CIDRS \
+  --body '[{"name":"<you>","cidr":"<your-public-ip>/32","description":"<why>"}]'
+gh workflow run deploy.yml --ref main
 ```
 
 Find your own public IP with `curl https://api.ipify.org`, and update the allow-list whenever it changes.
+The list replaces rather than merges, so send the whole thing each time, and keep the entries to routable addresses: an RFC 1918 range in there never matches a client arriving over the public internet, it just sits in the rule set looking like access somebody has.
 This is a deliberate, disclosed trade: with `auth_mode` still `off`, the IP allow-list is the only gate, meant for a testing window rather than a permanent posture.
 Revisit it once `auth_mode = entra` is real, at which point the token requirement carries that weight instead.
 
@@ -268,13 +272,27 @@ is](#what-this-is)), discovered only by testing reachability for real rather tha
 trusting the plan's own summary line, and that is exactly the kind of surprise this
 gate exists to catch before it reaches real infrastructure unattended.
 
-**External ingress is deliberately not something CI manages.** `deploy/ci.auto.tfvars`
-carries the baseline every apply needs (`create_role_assignments = false`,
-`acr_pull_confirmed = true`), but `external_ingress_enabled` and `allowed_client_cidrs`
-stay a manual override you apply yourself when you want to reach the app from outside
-`kiicl-vnet` (see [Reaching it](#reaching-it)). A CI-triggered apply that ran without
-them would reset ingress to internal-only, the variable's default - if you still want
-external access afterward, re-run your own apply with those two flags.
+**External ingress is declared from repository settings, not from a local apply.**
+`deploy/ci.auto.tfvars` carries the baseline every apply needs (`create_role_assignments = false`, `acr_pull_confirmed = true`), and the two ingress variables come from this repository's Actions settings instead: the variable `EXTERNAL_INGRESS_ENABLED`, and the secret `ALLOWED_CLIENT_CIDRS` holding the allow-list as JSON.
+
+```bash
+gh variable set EXTERNAL_INGRESS_ENABLED --body true
+gh secret set ALLOWED_CLIENT_CIDRS --body '[{"name":"someone","cidr":"203.0.113.7/32","description":"why"}]'
+```
+
+This was a manual override at first, on the theory that CI had no business opening the app to the internet.
+What it actually bought was every merge to `main` silently revoking an allow-list somebody had applied by hand: the plan resolves both variables on every run, so a run that does not carry them reads as "close the app", and the only symptom is that the MCP client stops connecting.
+Declaring them here means the plan says what is true.
+
+**The allow-list is a secret rather than a variable because this repository is public**, so its Actions logs are too, and an entry pairs a named colleague with their home IP.
+The plan job registers each field with `::add-mask::` before running Terraform, so the plan output shows `***` where the entries would otherwise be printed in full.
+Nothing masks a log written before the mask existed: if an allow-list ever reaches a public log, delete that run's logs (`gh api -X DELETE repos/<owner>/<repo>/actions/runs/<id>/logs`) rather than leaving it.
+
+Changing either value takes effect on the next Deploy, which `workflow_dispatch` exists to trigger without an empty commit:
+
+```bash
+gh workflow run deploy.yml --ref main
+```
 
 ## When role assignments fail
 

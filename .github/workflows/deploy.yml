@@ -95,27 +95,67 @@ jobs:
         with:
           terraform_version: "1.6"
 
-      # runner_image has to be passed on every plan, not only on the plan that first
-      # creates the runner. Terraform reconciles against what this run declares, not
-      # against what some earlier run left behind, so a plan that omits it resolves the
-      # variable to its empty default and reads as "destroy the runner" - which is
-      # exactly what would happen to a runner stood up by a one-off local apply. Making
-      # the switch a repository variable keeps the whole lifecycle in this pipeline:
-      # unset or anything but "true" means no runner, and no runner is the honest state
-      # until the Key Vault PAT and the runner identity's three role assignments exist.
-      # See deploy/README.md, "Stage 2: the publish runner".
+      # The allow-list is a secret rather than a variable for one reason: ki-icl is a
+      # public repository, so these logs are world-readable, and an allow-list entry
+      # pairs a named colleague with their home IP - personal data, which does not
+      # belong in a public log any more than in a public file. GitHub masks a secret
+      # only where it appears verbatim, and terraform prints name, cidr and description
+      # on separate lines, so each field is registered on its own here, before the step
+      # that can print any of them runs.
+      - name: Mask the allow-list before anything can print it
+        env:
+          ALLOWED_CLIENT_CIDRS: ${{ secrets.ALLOWED_CLIENT_CIDRS }}
+        run: |
+          set -euo pipefail
+          [ -n "${ALLOWED_CLIENT_CIDRS:-}" ] || exit 0
+          jq -r '.[] | .cidr, (.cidr | split("/")[0]), .name, (.description // empty)' \
+            <<<"$ALLOWED_CLIENT_CIDRS" |
+            while IFS= read -r value; do
+              [ -n "$value" ] && echo "::add-mask::$value"
+            done
+
+      # Every -var here is resolved on every plan, whether or not this run means to
+      # change it, because terraform reconciles against what the run declares rather
+      # than against what an earlier one left behind. That cuts both ways:
+      #
+      # runner_image omitted reads as "destroy the runner", which is what would happen
+      # to a runner stood up by a one-off local apply. Making the switch a repository
+      # variable keeps the whole lifecycle in this pipeline: unset or anything but
+      # "true" means no runner, and no runner is the honest state until the Key Vault
+      # PAT and the runner identity's three role assignments exist. See
+      # deploy/README.md, "Stage 2: the publish runner".
+      #
+      # The two ingress variables are here for the same reason, learned the harder way.
+      # They used to be a deliberate local-only override, on the theory that CI had no
+      # business opening the app to the internet. What that actually bought was every
+      # merge to main silently revoking an allow-list a human had applied by hand, with
+      # the revocation visible only as two lines in a plan nobody reads closely - and
+      # the app is reachable from outside kiicl-vnet by no other route, so the first
+      # symptom is the MCP client dying. Declaring them from repository settings means
+      # the plan says what is true, and the values still never enter this repository.
       - name: terraform plan
         working-directory: deploy
+        env:
+          ALLOWED_CLIENT_CIDRS: ${{ secrets.ALLOWED_CLIENT_CIDRS }}
         run: |
           set -euo pipefail
           runner_image=""
           if [ "${{ vars.PUBLISH_RUNNER_ENABLED }}" = "true" ]; then
             runner_image="${{ needs.build-and-push.outputs.runner_image }}"
           fi
+          external_ingress=false
+          if [ "${{ vars.EXTERNAL_INGRESS_ENABLED }}" = "true" ]; then
+            external_ingress=true
+          fi
+          # Empty means no rule, which with external_ingress_enabled = true denies
+          # everyone rather than allowing everyone. See variables.tf.
+          allowed_cidrs="${ALLOWED_CLIENT_CIDRS:-[]}"
           terraform init -backend-config=backend.hcl -input=false
           terraform plan -input=false -out=tfplan.binary \
             -var "image=${{ needs.build-and-push.outputs.image }}" \
-            -var "runner_image=$runner_image"
+            -var "runner_image=$runner_image" \
+            -var "external_ingress_enabled=$external_ingress" \
+            -var "allowed_client_cidrs=$allowed_cidrs"
 
       - uses: actions/upload-artifact@v7
         with:
