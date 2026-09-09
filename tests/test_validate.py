@@ -260,7 +260,7 @@ def test_a_policy_that_leaves_a_known_domain_undecided_is_rejected(source_tree: 
 
     errors = validate(source_tree)
 
-    assert any("hr" in e and POLICY_FILENAME in e for e in errors), errors
+    assert any("team" in e and POLICY_FILENAME in e for e in errors), errors
 
 
 def test_a_policy_naming_a_domain_outside_the_partition_is_rejected(source_tree: Path):
@@ -269,9 +269,9 @@ def test_a_policy_naming_a_domain_outside_the_partition_is_rejected(source_tree:
     write_policy(
         source_tree,
         "version: 1\nroles:\n  ctx.colleague:\n    description: Everyone.\n"
-        "    grants:\n      company: internal\n      finance: internal\n      hr: internal\n"
-        "      marketing: internal\n      projects: internal\n      sales: internal\n"
-        "      value-creation: internal\n      value-delivery: internal\n"
+        "    grants:\n      company: internal\n      method: internal\n"
+        "      offerings: internal\n      case-studies: internal\n      team: internal\n"
+        "      marketing: internal\n      projects: internal\n"
         "      operations: internal\n",
     )
 

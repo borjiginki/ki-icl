@@ -42,41 +42,52 @@ async def main() -> int:
 
         domains = await call("list_domains", {})
         ids = [d["id"] for d in domains["domains"]]
-        check("4. list_domains() shows the finance domain", "finance" in ids, f"domains={ids}")
+        check("4. list_domains() shows the marketing domain", "marketing" in ids, f"domains={ids}")
 
-        manifest = await call("get_domain_manifest", {"domain": "finance"})
-        row = next((a for a in manifest.get("artifacts", []) if a["id"] == "expense-policy"), None)
+        manifest = await call("get_domain_manifest", {"domain": "marketing"})
+        row = next(
+            (a for a in manifest.get("artifacts", []) if a["id"] == "ki-performance-corporate-identity"),
+            None,
+        )
         check(
-            "5. get_domain_manifest lists expense-policy with a version_id",
+            "5. get_domain_manifest lists ki-performance-corporate-identity with a version_id",
             bool(row and row.get("version_id")),
             f"version_id={row and row.get('version_id')}",
         )
 
-        found = await call("get_artifact", {"domain": "finance", "ids": ["expense-policy"]})
+        found = await call(
+            "get_artifact", {"domain": "marketing", "ids": ["ki-performance-corporate-identity"]}
+        )
         entry = found["artifacts"][0]
         readme = next((f for f in entry.get("files", []) if f["path"] == "README.md"), None)
         check(
             "6. get_artifact returns the full text of README.md",
-            bool(readme and readme["content"].startswith("# Expense policy")),
+            bool(readme and readme["content"].startswith("# KI performance")),
             f"{entry['status']}, {entry.get('file_count')} file(s), "
             f"{readme and len(readme['content'])} chars of README.md",
         )
 
-        typo = await call("get_artifact", {"domain": "finance", "ids": ["expense-polcy"]})
+        typo = await call(
+            "get_artifact", {"domain": "marketing", "ids": ["ki-performance-corporate-identty"]}
+        )
         miss = typo["artifacts"][0]
         check(
             "7. one character wrong is an honest miss, and nothing else",
-            miss == {"status": "not_found", "id": "expense-polcy"},
+            miss == {"status": "not_found", "id": "ki-performance-corporate-identty"},
             json.dumps(miss),
         )
 
         batch = await call(
-            "get_artifact", {"domain": "finance", "ids": ["expense-policy", "does-not-exist"]}
+            "get_artifact",
+            {
+                "domain": "marketing",
+                "ids": ["ki-performance-corporate-identity", "does-not-exist"],
+            },
         )
         statuses = [(a["id"], a["status"]) for a in batch["artifacts"]]
         check(
             "8. a batch degrades per item and the call still succeeds",
-            statuses == [("expense-policy", "found"), ("does-not-exist", "not_found")],
+            statuses == [("ki-performance-corporate-identity", "found"), ("does-not-exist", "not_found")],
             f"{statuses}",
         )
 

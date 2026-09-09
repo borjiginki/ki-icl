@@ -356,7 +356,7 @@ def test_the_repos_own_policy_loads_and_grants_the_known_domains(tmp_path):
     policy = access.load_policy(REPO_ROOT, mode=access.Mode.ENFORCE)
     assert policy.roles, "access-policy.yaml at the repo root must load"
     granted = {d for grants in policy.roles.values() for d in grants}
-    assert "hr" in granted and "projects" in granted
+    assert "team" in granted and "projects" in granted
 
 
 def test_the_real_policy_gives_nobody_every_domain_at_the_top_level(tmp_path):

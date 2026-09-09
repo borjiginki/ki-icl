@@ -1,14 +1,15 @@
 id: projects
 description: >-
   What KI group is working on right now, one artifact per engagement. Look here
-  for any question about a named project, such as what it is, what stage it is
-  at, who is on it, or what is blocked. Look here too for any question across
-  projects, such as which are at risk or off track, what sits in each stage, or
-  whose status has gone stale: every row in this domain's manifest carries a
-  `progress` object with `stage`, `health` and `as_of`, so a portfolio question
-  is answered from the manifest without fetching a single project. `health` is
-  exactly one of `on track`, `at risk` or `blocked`, and `stage` exactly one of
-  `discovery`, `mobilising`, `delivery`, `handover`, `closed` or `stopped`, so
-  "not on track" means `at risk` or `blocked` and nothing has to be inferred.
-  Always report the `as_of` date with the answer, because a status can be older
-  than it looks.
+  for any question about a named live project, such as what it is, what stage
+  it is at, who is on it, or what is blocked. Look here too for any question
+  across projects, such as which are at risk or off track, what sits in each
+  stage, or whose status has gone stale: every row in this domain's manifest
+  carries a `progress` object with `stage`, `health` and `as_of`, so a portfolio
+  question is answered from the manifest without fetching a single project.
+  `health` is exactly one of `on track`, `at risk` or `blocked`, and `stage`
+  exactly one of `discovery`, `mobilising`, `delivery`, `handover`, `closed` or
+  `stopped`, so "not on track" means `at risk` or `blocked` and nothing has to
+  be inferred. Always report the `as_of` date with the answer, because a status
+  can be older than it looks. For a closed, delivered engagement, use
+  `case-studies` instead.

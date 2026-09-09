@@ -117,24 +117,24 @@ def test_the_broad_principal_reads_widely_and_still_not_personnel_material():
     broad = principal_named("broad")
 
     assert access.may_read_row(POLICY, broad, "projects", row("restricted"))
-    assert access.may_read_row(POLICY, broad, "finance", row("restricted"))
-    assert not access.may_read_row(POLICY, broad, "hr", row("confidential"))
+    assert access.may_read_row(POLICY, broad, "case-studies", row("restricted"))
+    assert not access.may_read_row(POLICY, broad, "team", row("confidential"))
 
 
 def test_the_delivery_principal_is_raised_in_its_own_compartments_only():
     delivery = principal_named("delivery")
 
     assert access.may_read_row(POLICY, delivery, "projects", row("restricted"))
-    assert not access.may_read_row(POLICY, delivery, "finance", row("restricted"))
-    assert access.may_read_row(POLICY, delivery, "finance", row("internal"))
+    assert not access.may_read_row(POLICY, delivery, "offerings", row("restricted"))
+    assert access.may_read_row(POLICY, delivery, "offerings", row("internal"))
 
 
 def test_the_people_principal_is_the_only_one_that_reaches_personnel_material():
     people = principal_named("people")
 
-    assert access.may_read_row(POLICY, people, "hr", row("confidential"))
+    assert access.may_read_row(POLICY, people, "team", row("confidential"))
     for other in ("broad", "delivery", "baseline"):
-        assert not access.may_read_row(POLICY, principal_named(other), "hr", row("confidential"))
+        assert not access.may_read_row(POLICY, principal_named(other), "team", row("confidential"))
 
 
 def test_the_baseline_principal_sees_every_domain_at_internal_and_no_higher():

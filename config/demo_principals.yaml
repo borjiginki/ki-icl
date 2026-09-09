@@ -20,24 +20,25 @@ tenant: 00000000-0000-0000-0000-0000000d3m00
 client: 00000000-0000-0000-0000-00000c11e470
 
 principals:
-  # Reads widely across delivery, sales and finance, and STILL cannot read personnel
-  # material. This is the row that proves there is no global top level: it fails the day
+  # Reads widely across delivery and sales, and STILL cannot read personnel material.
+  # This is the row that proves there is no global top level: it fails the day
   # somebody adds a wildcard or an everything-role to the policy.
   - id: broad
     token: demo-token-broad
     oid: 00000000-0000-4000-8000-000000000001
-    roles: [ctx.colleague, ctx.delivery, ctx.sales, ctx.finance]
+    roles: [ctx.colleague, ctx.delivery, ctx.sales]
     scopes: [context.read]
 
-  # Raised in its own compartments only: projects at `restricted`, finance at
-  # `internal`. Proves the domain axis is a compartment and not a single clearance.
+  # Raised in its own compartments only: projects and case-studies at `restricted`,
+  # everything else at `internal`. Proves the domain axis is a compartment and not a
+  # single clearance.
   - id: delivery
     token: demo-token-delivery
     oid: 00000000-0000-4000-8000-000000000002
     roles: [ctx.colleague, ctx.delivery]
     scopes: [context.read]
 
-  # The only row that reaches `hr: confidential`, and deliberately not a leadership
+  # The only row that reaches `team: confidential`, and deliberately not a leadership
   # role. See the ctx.people description in access-policy.yaml.
   - id: people
     token: demo-token-people

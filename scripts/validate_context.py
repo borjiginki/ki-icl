@@ -35,27 +35,33 @@ ROOT = Path(__file__).resolve().parent.parent
 ALLOWED_SUFFIXES = {".md", ".yaml", ".yml", ".json", ".txt", ".csv"}
 MAX_FILE_BYTES = 1_048_576
 
-# The partition is a decision, not a convention: issue #20 OQ-13, settled 2026-08-31
-# on the value-chain-plus-support-function model, with `company` added for facts that
-# belong to no single function and `projects` for per-engagement state. A new domain
+# The partition is a decision, not a convention: revised 2026-09-09 when real content
+# replaced the placeholder value-chain-plus-support-function model. The original eight
+# business-function domains assumed a shape the real corpus did not have: several stood
+# empty with no content in sight, while two real, differently-shaped bodies of material
+# (a 119-case reference library and 13 personal staffing profiles) had nowhere to go
+# without either overloading `sales`/`hr` or fragmenting across them. The domains below
+# instead follow what an agent is actually trying to do, mirroring the organizing
+# principle of the source layer this content was drawn from. `company` and `projects`
+# keep their original justification: identity facts belong to no single function, and
+# `projects` is per-engagement state rather than stable, reusable material. A new domain
 # changes how the whole corpus is organised and every telemetry key written against it,
 # so it belongs in a pull request that says so rather than in a mkdir.
 KNOWN_DOMAINS = {
     "company",
-    "finance",
-    "hr",
+    "method",
+    "offerings",
+    "case-studies",
+    "team",
     "marketing",
     "projects",
-    "sales",
-    "value-creation",
-    "value-delivery",
 }
 
 # A domain whose artifacts all answer the same questions is only usable if they answer
 # them in the same place. A project whose stage is buried in README.md prose cannot
 # answer "what stage is it at", and an agent cannot learn one layout per project.
 # Kept as data rather than a per-domain branch so the next domain that needs a shape is
-# a dictionary entry. See domains/value-creation/project-status-reporting/.
+# a dictionary entry. See domains/method/project-status-reporting/.
 REQUIRED_ARTIFACT_FILES: dict[str, tuple[str, ...]] = {
     "projects": ("status.md", "team.md"),
 }

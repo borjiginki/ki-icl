@@ -32,34 +32,29 @@ That is why every file reporting a point in time carries an `**As of YYYY-MM-DD*
 
 ## Domains
 
-Eight, and the list is a decision rather than a convention.
-The six business functions come from the project lead's model.
-`company` and `projects` are additions, and each is justified below the table.
+Seven, and the list is a decision rather than a convention.
+The original partition followed a value-chain-plus-support-function model with eight business-function domains.
+It was replaced on 2026-09-09, when real content first landed and turned out not to fit that shape: several of the eight had no content in sight, while a 119-case reference library and 13 personal staffing profiles had nowhere to go without overloading `sales` and `hr` or fragmenting across several domains.
+The domains below instead follow what an agent is actually trying to do, mirroring the organizing principle of the source layer this content was drawn from.
 
-| Domain | The function | Look here for |
-|---|---|---|
-| `company` | (addition) | Who KI group is: what it does, how it positions itself, the certifications and regulatory commitments it operates under |
-| `projects` | (addition) | What we are working on right now, one artifact per engagement: goal, scope, stage, health, team, decisions, dates |
-| `value-creation` | Value Creation | Engineering work: methodologies, technical standards, review practices |
-| `value-delivery` | Value Delivery | After-sales communication to the customer: handover, escalation, and the conventions for what a customer is told. Never the current state of an engagement, which is `projects` |
-| `marketing` | Marketing | Creating awareness: positioning, messaging, content, events, campaigns |
-| `sales` | Sales | Offers, estimation and man day rates, pricing, contract shape |
-| `finance` | Finance | Budgets, invoicing, cost and expense rules, approval thresholds, reporting |
-| `hr` | HR | People and legal: employment, personnel processes, and the contracts around them |
+| Domain | Look here for |
+|---|---|
+| `company` | Who KI group is: the ecosystem of companies, organisational structure, mission, positioning and locations |
+| `method` | How KI group thinks about and runs its work: the strategic operating canon and the methodologies behind how an engagement is scoped, built and reported on |
+| `offerings` | What KI group sells and how to talk about it: the offering catalogue, the delivery arc and gates, positioning and proof |
+| `case-studies` | Delivered reference engagements KI group can point to, one artifact per case, cleared for naming the client |
+| `team` | Who is on the KI group team and what they can do: role, skills, experience and certifications, for staffing work |
+| `marketing` | How KI group presents its brand: corporate identity, visual rules, and, as it grows, tone of voice and templates |
+| `projects` | What KI group is working on right now, one artifact per live engagement: goal, scope, stage, health, team, decisions, dates |
 
-`company` exists because identity facts belong to no single function, and the old catch-all `hr` description was evidence somebody already needed that home.
+`company` and `projects` keep their original justification unchanged: identity facts belong to no single function, and `projects` is per-instance state that changes weekly rather than the stable, reusable material every other domain holds — putting the two side by side would make one domain do two jobs, and projects accumulate without bound while the rest do not.
 
-`projects` is the one domain that is **not** a business function, and it is worth being explicit about why.
-Every other domain holds facts that are stable and reusable: how we run a discovery workshop, what we reimburse.
-A project is the opposite, per-instance state that changes weekly, and the routing rule below does not separate the two because engineering owns both.
-The justification is volatility and cardinality rather than function: putting weekly-changing project state beside the methodology that should be stable would make one domain do two jobs, and projects accumulate without bound while functions do not.
-
-Five of the eight hold no artifacts yet, and that is the intended state rather than an unfinished one.
+Two of the seven, `company` and `projects`, hold no artifacts yet, and that is the intended state rather than an unfinished one.
 An empty domain answers `get_domain_manifest` with an honest empty list, and it gives `report_gap` somewhere correct to put the demand.
-That tool asks an agent to pick a domain "from `list_domains`", so a marketing question with no `marketing` domain to name would land under a mislabelled one or vanish entirely.
+That tool asks an agent to pick a domain "from `list_domains`", so a live-engagement question with no `projects` domain to name would land under a mislabelled one or vanish entirely.
 
 `KNOWN_DOMAINS` in [scripts/validate_context.py](scripts/validate_context.py) is the gate.
-Adding a domain means amending that constant and saying why in the pull request, because a new domain changes how the whole corpus is organised and every telemetry key written against it.
+Adding a domain means amending that constant (and the matching grants in [access-policy.yaml](access-policy.yaml)) and saying why in the pull request, because a new domain changes how the whole corpus is organised and every telemetry key written against it.
 
 ### Which domain does an artifact go in
 
@@ -70,15 +65,13 @@ Routing by owner is the only rule that agrees with the axis ownership will land 
 Audiences overlap and drift anyway.
 Retrieval from the other side is unaffected, because the artifact's own `description` carries the "when to use" triggers wherever the artifact sits.
 
-Two artifacts in the repo are worked examples, and both land against what the audience rule would have said:
+One artifact in the repo is a worked example, and it lands against what the audience rule would have said:
 
 | Artifact | Domain, and why | The audience rule would have said |
 |---|---|---|
-| `expense-policy` | `finance`, which sets the thresholds and the evidence rules | `hr`, since an employee is the one asking |
-| `discovery-workshop` | `value-creation`, which owns the methodology | `sales`, since its own description says "when preparing, scoping, or quoting" |
+| `project-status-reporting` | `method`, which owns how a project artifact is laid out and maintains the convention | `projects`, since that is who asks about a project's layout |
 
-The rule also decides where the project reporting convention lives.
-`project-status-reporting` is in `value-creation`, not `projects`, because engineering authors and maintains it, and because `projects` holds engagements rather than documents about engagements.
+The rule decides this one precisely because `projects` holds engagements rather than documents about engagements: the convention is authored and maintained by whoever owns delivery methodology, so it lives in `method` even though most questions about it will come from someone looking at `projects`.
 
 ### The `projects` domain
 
@@ -107,7 +100,7 @@ The manifest carries id, title, kind and description, while stage and health liv
 So the packager lifts the `status.md` header into the manifest as a `progress` object, exactly as it already derives `version_id` by running git at package time:
 
 ```json
-{ "id": "dhl-cbs", "title": "DHL CBS",
+{ "id": "acme-onboarding", "title": "Acme Onboarding",
   "progress": { "as_of": "2026-08-28", "stage": "delivery", "health": "at risk" } }
 ```
 
@@ -133,7 +126,7 @@ Note the fetch granularity.
 `get_artifact` returns every file in the folder in one call, so the file split serves human editing and precise quoting, not fetch size.
 A project folder with six files returns all six every time, which is the reason to keep each one tight.
 
-The conventions, the stage and health vocabularies, and what an update is meant to cost are in [project-status-reporting](domains/value-creation/project-status-reporting/README.md).
+The conventions, the stage and health vocabularies, and what an update is meant to cost are in [project-status-reporting](domains/method/project-status-reporting/README.md).
 One thing there is still unresolved and matters before real project data lands: nothing yet fails when a status goes stale.
 Read access is no longer broad, but note what that does and does not buy, in [access control](#access-control): the MCP read path is scoped to the caller, while the repository these files live in is not.
 
@@ -212,9 +205,9 @@ The disclaimers sat in the file bodies, which the recommended path never opens.
 So the state is served on the row, and `get_domain_manifest` appends a caveat naming the unapproved artifacts:
 
 ```
-Fetch with `get_artifact("projects", ["<id>"])`. NOT APPROVED: `demo` (dhl-cbs,
-nordwind-dispatch). Say so in any answer drawn from these, and never present
-`demo` content as fact.
+Fetch with `get_artifact("team", ["<id>"])`. NOT APPROVED: `draft` (a-vas,
+b-ali, ...). Say so in any answer drawn from these, and never present
+unreviewed content as settled fact.
 ```
 
 The caveat travels with the row that needs it, because an instruction an agent read once at connection time loses to a payload that looks like fact.
@@ -284,10 +277,10 @@ Every context lookup is recorded, one line per artifact actually looked up:
 
 ```json
 {"ts":"2026-08-28T09:04:11Z","event":"context_use","tool":"get_artifact",
- "domain":"finance","id":"expense-policy","outcome":"found",
+ "domain":"marketing","id":"ki-performance-corporate-identity","outcome":"found",
  "version_id":"b0f9dd0a...","file_count":2,"duration_ms":0.7}
 {"ts":"2026-08-28T09:04:11Z","event":"context_use","tool":"get_artifact",
- "domain":"hr","id":"parental-leave","outcome":"not_found","duration_ms":0.4}
+ "domain":"team","id":"parental-leave","outcome":"not_found","duration_ms":0.4}
 ```
 
 **The miss records are the reason this exists.**
@@ -409,7 +402,7 @@ Because `StaticTokenVerifier` passes its claims through unchanged, the demo toke
 Engineering does not block on these, but production does.
 
 - **Art. 6(1)(f)** legitimate interests, with a written balancing test. Consent is not available in an employment relationship. German employee data is additionally governed by §26 BDSG and Art. 88 GDPR, and the DPO confirms the provision and its numbering rather than this file.
-- **§87(1) no. 6 BetrVG co-determination.** A per-person read log over `hr` and `finance` content is objectively *suitable for* monitoring employee behaviour, and suitability is assessed regardless of intent. Betriebsrat consultation, in practice a Betriebsvereinbarung, comes before the log has data in it. [team.md](domains/projects/dhl-cbs/team.md) already reasoned about this boundary for status reporting, and the consultation goes better carrying that reasoning.
+- **§87(1) no. 6 BetrVG co-determination.** A per-person read log over `team` content (personnel and staffing profiles) is objectively *suitable for* monitoring employee behaviour, and suitability is assessed regardless of intent. Betriebsrat consultation, in practice a Betriebsvereinbarung, comes before the log has data in it. [project-status-reporting](domains/method/project-status-reporting/README.md#progress-belongs-to-the-project-never-to-a-person) already reasoned about this same boundary for status reporting, and the consultation goes better carrying that reasoning.
 - **The control that makes the purpose limitation real: no tool here aggregates by actor.** Neither the dashboard nor `make usage` has a per-actor ranking, volume chart, or actor dimension, and `test_no_aggregation_groups_by_actor` fails if one is added. This log answers "did access control hold", never "how much did this person read".
 - **Retention 90 days**, enforced where the store is: production sets `CONTEXT_USAGE_LOG=""` so Log Analytics is the only store, with workspace retention set there and the workspace pinned to an EU region. Token validation is local and the JWKS fetch carries only public signing keys, so there is no Art. 44 transfer in the auth path.
 - **Not an Annex III high-risk AI system**, and the reason is worth keeping: no automated decision about a person, no profile, no ranking or score. Any future feature that ranks, scores or compares people changes that classification.

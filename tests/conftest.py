@@ -33,17 +33,16 @@ roles:
     description: Any authenticated colleague.
     grants:
       company: internal
-      finance: internal
-      hr: internal
+      method: internal
+      offerings: internal
+      case-studies: internal
+      team: internal
       marketing: internal
       projects: internal
-      sales: internal
-      value-creation: internal
-      value-delivery: internal
   ctx.people:
     description: HR and the works-council contact.
     grants:
-      hr: confidential
+      team: confidential
 """
 
 
