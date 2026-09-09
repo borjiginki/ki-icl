@@ -47,10 +47,12 @@ The domains below instead follow what an agent is actually trying to do, mirrori
 | `company` | Who KI group is: the ecosystem of companies, organisational structure, mission, positioning and locations |
 | `method` | How KI group thinks about and runs its work: the strategic operating canon and the methodologies behind how an engagement is scoped, built and reported on |
 | `offerings` | What KI group sells and how to talk about it: the offering catalogue, the delivery arc and gates, positioning and proof |
-| `case-studies` | Delivered reference engagements KI group can point to, one artifact per case, cleared for naming the client |
+| `case-studies` | **Closed, delivered** reference engagements KI group can point to, one artifact per case, cleared for naming the client - "have we built this before" |
 | `team` | Who is on the KI group team and what they can do: role, skills, experience and certifications, for staffing work |
 | `marketing` | How KI group presents its brand: corporate identity, visual rules, and, as it grows, tone of voice and templates |
-| `projects` | What KI group is working on right now, one artifact per live engagement: goal, scope, stage, health, team, decisions, dates |
+| `projects` | What KI group is working on **right now**, one artifact per **live** engagement: goal, scope, stage, health, team, decisions, dates - "what's happening today" |
+
+`case-studies` and `projects` are easy to conflate, because both are "an engagement" - the test is time, not topic. An engagement moves from `projects` to `case-studies` exactly once, on delivery, never both at once. See `ki-ccl`'s README for the fuller breakdown and why `projects` currently ships empty.
 
 `company` and `projects` keep their original justification unchanged: identity facts belong to no single function, and `projects` is per-instance state that changes weekly rather than the stable, reusable material every other domain holds — putting the two side by side would make one domain do two jobs, and projects accumulate without bound while the rest do not.
 
