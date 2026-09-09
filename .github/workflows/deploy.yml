@@ -13,6 +13,11 @@ name: Deploy
 on:
   push:
     branches: [main]
+  # Stage 2 of deploy/README.md turns the publish runner on by flipping the repository
+  # variable PUBLISH_RUNNER_ENABLED, which is read at plan time rather than committed
+  # anywhere. Without a manual trigger, acting on that flip would mean pushing an empty
+  # commit to main just to make the pipeline re-read a variable that already changed.
+  workflow_dispatch:
 
 concurrency:
   group: deploy-main

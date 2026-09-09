@@ -108,7 +108,7 @@ In order:
 1. **Merge, and let Deploy apply.** This creates `kiicl-runner-identity` and stops there, because the switch is still off. That identity is what the next step needs a principal to point at.
 2. **Have an admin grant it three role assignments**, out of band, exactly as the app's were (see [When role assignments fail](#when-role-assignments-fail)): `Storage File Data Privileged Contributor` on the Files account, `Key Vault Secrets User` on the vault, and `AcrPull` on the registry. `create_role_assignments` stays `false`, so Terraform attempts none of them.
 3. **Set the PAT** the runner registers with, see [The runner's GitHub PAT](#the-runners-github-pat) below.
-4. **Set `PUBLISH_RUNNER_ENABLED` to `true`** in this repository's variables and re-run Deploy. That is the run that creates the Container App; the runner registers itself against ki-ccl within about a minute of the revision going healthy, and shows up under ki-ccl's Settings, Actions, Runners.
+4. **Set `PUBLISH_RUNNER_ENABLED` to `true`** in this repository's variables and re-run Deploy (`gh workflow run deploy.yml --ref main`, the `workflow_dispatch` trigger that exists so acting on this flip does not need an empty commit). That is the run that creates the Container App; the runner registers itself against ki-ccl within about a minute of the revision going healthy, and shows up under ki-ccl's Settings, Actions, Runners.
 
 Then hand the outputs to ki-ccl as repository variables:
 
