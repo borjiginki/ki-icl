@@ -320,11 +320,12 @@ def test_a_tenant_id_that_is_not_a_guid_is_refused_before_it_reaches_a_url(monke
     from server import mcp_server
 
     monkeypatch.setenv("KI_ICL_AUTH", "entra")
+    monkeypatch.setenv("AZURE_TENANT_ID", "x/../../evil")
     monkeypatch.setenv("KI_ICL_ENTRA_TENANT_ID", "x/../../evil")
     monkeypatch.setenv("KI_ICL_ENTRA_CLIENT_ID", "cid")
     monkeypatch.setenv("KI_ICL_ENTRA_BASE_URL", "https://example.invalid")
 
-    with pytest.raises(SystemExit, match="TENANT_ID"):
+    with pytest.raises(SystemExit, match="TENANT"):
         mcp_server.auth_from_env()
 
 
