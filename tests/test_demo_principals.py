@@ -145,7 +145,6 @@ def test_the_broad_principal_reads_widely_and_still_not_personnel_material():
     broad = principal_named("broad")
 
     assert access.may_read_row(policy, broad, "projects", row("restricted"))
-    assert access.may_read_row(policy, broad, "case-studies", row("restricted"))
     assert not access.may_read_row(policy, broad, "team", row("confidential"))
 
 

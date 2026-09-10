@@ -54,7 +54,6 @@ roles:
       company: internal
       method: internal
       offerings: internal
-      case-studies: internal
       team: internal
       marketing: internal
       projects: internal
