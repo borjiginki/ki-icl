@@ -133,6 +133,9 @@ jobs:
       # the app is reachable from outside kiicl-vnet by no other route, so the first
       # symptom is the MCP client dying. Declaring them from repository settings means
       # the plan says what is true, and the values still never enter this repository.
+      #
+      # dashboard_enabled joins them for the same reason, and carries max_replicas with
+      # it because the dashboard's own precondition requires a single replica.
       - name: terraform plan
         working-directory: deploy
         env:
@@ -147,6 +150,15 @@ jobs:
           if [ "${{ vars.EXTERNAL_INGRESS_ENABLED }}" = "true" ]; then
             external_ingress=true
           fi
+          dashboard=false
+          # The dashboard reads a usage file each replica writes for itself, so above
+          # one replica the page shows a partial picture. variables.tf makes that a hard
+          # precondition, and this array is what satisfies it.
+          replicas=()
+          if [ "${{ vars.DASHBOARD_ENABLED }}" = "true" ]; then
+            dashboard=true
+            replicas=(-var "max_replicas=1")
+          fi
           # Empty means no rule, which with external_ingress_enabled = true denies
           # everyone rather than allowing everyone. See variables.tf.
           allowed_cidrs="${ALLOWED_CLIENT_CIDRS:-[]}"
@@ -155,7 +167,9 @@ jobs:
             -var "image=${{ needs.build-and-push.outputs.image }}" \
             -var "runner_image=$runner_image" \
             -var "external_ingress_enabled=$external_ingress" \
-            -var "allowed_client_cidrs=$allowed_cidrs"
+            -var "allowed_client_cidrs=$allowed_cidrs" \
+            -var "dashboard_enabled=$dashboard" \
+            ${replicas[@]+"${replicas[@]}"}
 
       - uses: actions/upload-artifact@v7
         with:

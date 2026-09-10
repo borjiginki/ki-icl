@@ -197,6 +197,33 @@ variable "allowed_client_cidrs" {
   default = []
 }
 
+variable "dashboard_enabled" {
+  description = <<-EOT
+    Whether the server also mounts the usage dashboard at /dashboard, on the same port
+    and behind the same ingress and allow-list as /mcp.
+
+    Demo scaffolding, off by default and deliberately hard to leave on. The dashboard
+    has no authentication of its own, its catalog panel lists every artifact id in the
+    corpus regardless of grants, and /dashboard/purge rewrites the usage log, so the IP
+    allow-list in allowed_client_cidrs is the entire gate. The preconditions on the
+    container app refuse it without external ingress, refuse it above one replica, and
+    refuse it outright once auth_mode = "entra"; the server carries its own copy of that
+    last one, so an out-of-band update cannot get around it either.
+
+    Turning this on also sets CONTEXT_USAGE_LOG to a path, which switches the file sink
+    back on alongside stderr. Log Analytics still receives every line, so the audit
+    store and its retention are unchanged; the file is an ephemeral copy in the
+    container's own writable layer that dies with the revision, and the dashboard is its
+    only reader.
+
+    Set by .github/workflows/deploy.yml from the repository variable DASHBOARD_ENABLED,
+    not from a local apply. Like the two ingress variables above, a value set by hand is
+    resolved back to the default by the next plan from main and silently revoked.
+  EOT
+  type        = bool
+  default     = false
+}
+
 # --- the ki-ccl publish runner -----------------------------------------------
 
 variable "runner_image" {

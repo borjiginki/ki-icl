@@ -187,10 +187,24 @@ resource "azurerm_container_app" "this" {
       }
 
       # Empty: stderr is the only sink, and Container Apps forwards it to the workspace
-      # whose retention is the retention policy.
+      # whose retention is the retention policy. The dashboard is the one exception, and
+      # it is not a second store in the sense that matters: Log Analytics still receives
+      # every line, and this file lives in the container's own writable layer, dies with
+      # the revision, and is read by nothing but /dashboard.
       env {
         name  = "CONTEXT_USAGE_LOG"
-        value = ""
+        value = var.dashboard_enabled ? "/app/logs/usage.jsonl" : ""
+      }
+
+      # /app is chown'd to the app user in the image, and the read-only corpus mount is
+      # at /app/context, so /app/logs is writable by uid 10001. server/usage.py creates
+      # it on first write.
+      dynamic "env" {
+        for_each = var.dashboard_enabled ? [1] : []
+        content {
+          name  = "KI_ICL_DASHBOARD"
+          value = "1"
+        }
       }
 
       dynamic "env" {
@@ -270,6 +284,21 @@ resource "azurerm_container_app" "this" {
     precondition {
       condition     = !(local.serving_ki_icl && !var.create_role_assignments && !var.acr_pull_confirmed)
       error_message = "Pulling from the registry needs the managed identity to hold AcrPull. Either let this configuration create it (create_role_assignments = true), or confirm the grant yourself against the real principal id and set acr_pull_confirmed = true."
+    }
+
+    precondition {
+      condition     = !(var.dashboard_enabled && !var.external_ingress_enabled)
+      error_message = "dashboard_enabled without external_ingress_enabled mounts a dashboard nobody can reach: the app's own ingress stays internal-only, and no VPN gateway, ExpressRoute or peering exists anywhere in this configuration."
+    }
+
+    precondition {
+      condition     = !(var.dashboard_enabled && var.max_replicas != 1)
+      error_message = "dashboard_enabled needs max_replicas = 1. Each replica writes its own usage file, so above one the page shows whichever replica the load balancer happened to pick, and nothing on the page reveals that the numbers are partial. The Deploy workflow passes this alongside the switch; a local apply has to set it."
+    }
+
+    precondition {
+      condition     = !(var.dashboard_enabled && var.auth_mode == "entra")
+      error_message = "dashboard_enabled and auth_mode = \"entra\" are mutually exclusive. The dashboard has no authentication of its own and lists every artifact id regardless of grants, so an IP allow-list stops being a defensible gate the moment there are real identities to gate. The server refuses this combination at startup too."
     }
   }
 
