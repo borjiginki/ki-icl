@@ -1,3 +1,5 @@
 pyyaml>=6.0
 # FastMCP 4 defaults to a sessionless protocol; telemetry assumes stable sessions.
-fastmcp>=2.10,<4
+fastmcp==3.4.7
+httpx>=0.28,<0.29
+python-multipart>=0.0.20

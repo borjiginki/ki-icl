@@ -1,10 +1,14 @@
-"""Entra config from the environment, and a JWT verifier that pins tenant and scopes.
+"""Entra config, JWT verification, and the Claude-facing OAuth facade on this host.
 
-This module is the resource-server half only. It resolves tenant, client, audience and
-scope from `AZURE_*` / `MCP_BASE_URL`, still accepting the `KI_ICL_ENTRA_*` aliases.
-`EntraJWTVerifier` is a `JWTVerifier` that also:
+Config and `EntraJWTVerifier` are the resource-server half: tenant, client, audience
+and scope from `AZURE_*` / `MCP_BASE_URL`, still accepting the `KI_ICL_ENTRA_*` aliases.
+The verifier also:
 - accepts Entra's full-URI `scp` values by adding the short suffix, and
 - refuses a token whose `tid` is not the configured tenant.
+
+The facade half publishes protected-resource and authorization-server metadata on this
+origin, redirects `/authorize` to Entra, and proxies `/token` with an allowlist.
+It never reads a client secret from the environment and never forwards `login_hint`.
 
 A rejection logs the generic string `Entra bearer token rejected` and nothing else.
 Claims, `oid`, the raw token, and email must never appear in that line: the parent
@@ -19,10 +23,15 @@ import os
 import re
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
+import httpx
+from fastmcp import FastMCP
+from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from mcp.server.auth.provider import AccessToken
+from starlette.requests import Request
+from starlette.responses import JSONResponse, RedirectResponse, Response
 
 from server.auth_env import canonical_or_legacy
 
@@ -171,3 +180,137 @@ class EntraJWTVerifier(JWTVerifier):
             log.warning("Entra bearer token rejected")
             return None
         return access
+
+
+_ENTRA_AUTHORIZE_PARAMS = frozenset(
+    {
+        "client_id",
+        "response_type",
+        "redirect_uri",
+        "scope",
+        "state",
+        "code_challenge",
+        "code_challenge_method",
+        "prompt",
+        "domain_hint",
+        "response_mode",
+        "nonce",
+    }
+)
+
+_ENTRA_TOKEN_PARAMS = frozenset(
+    {
+        "grant_type",
+        "code",
+        "redirect_uri",
+        "client_id",
+        "client_secret",
+        "code_verifier",
+        "refresh_token",
+        "scope",
+    }
+)
+
+
+def _origin(config: EntraConfig) -> str:
+    return config.base_url.rstrip("/")
+
+
+def protected_resource_metadata(config: EntraConfig) -> dict[str, Any]:
+    origin = _origin(config)
+    return {
+        "resource": f"{origin}/mcp",
+        "authorization_servers": [config.authorization_server],
+        "scopes_supported": [config.scope],
+        "bearer_methods_supported": ["header"],
+    }
+
+
+def oauth_metadata(config: EntraConfig) -> dict[str, Any]:
+    origin = _origin(config)
+    return {
+        "issuer": origin,
+        "authorization_endpoint": f"{origin}/authorize",
+        "token_endpoint": f"{origin}/token",
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "code_challenge_methods_supported": ["S256"],
+        "token_endpoint_auth_methods_supported": [
+            "client_secret_post",
+            "client_secret_basic",
+        ],
+        "scopes_supported": ["openid", "offline_access", config.scope],
+    }
+
+
+class EntraAuthProvider(RemoteAuthProvider):
+    """Resource-server verifier plus the this-host authorization server Claude talks to."""
+
+    def __init__(self, config: EntraConfig) -> None:
+        self.entra_config = config
+        verifier = EntraJWTVerifier(
+            jwks_uri=config.jwks_uri,
+            issuer=config.issuer,
+            audience=list(config.audiences),
+            required_scopes=[config.required_scope],
+            ssrf_safe=True,
+            tenant_id=config.tenant_id,
+            scope_resource=config.scope_resource,
+        )
+        super().__init__(
+            token_verifier=verifier,
+            authorization_servers=[config.authorization_server],
+            base_url=config.base_url,
+            scopes_supported=[config.scope],
+        )
+
+
+def register_oauth_routes(mcp: FastMCP, config: EntraConfig) -> None:
+    """Claude probes these on this host; authorize and token then go to Entra."""
+
+    @mcp.custom_route("/.well-known/oauth-protected-resource", methods=["GET"])
+    async def _protected_resource_root(_: Request) -> JSONResponse:
+        return JSONResponse(protected_resource_metadata(config))
+
+    @mcp.custom_route("/.well-known/oauth-authorization-server", methods=["GET"])
+    async def _authorization_server_metadata(_: Request) -> JSONResponse:
+        return JSONResponse(oauth_metadata(config))
+
+    @mcp.custom_route("/authorize", methods=["GET"])
+    async def _authorize_redirect(request: Request) -> RedirectResponse:
+        params = {
+            key: value
+            for key, value in request.query_params.items()
+            if key in _ENTRA_AUTHORIZE_PARAMS
+        }
+        if not params.get("scope"):
+            params["scope"] = config.default_authorize_scope
+        entra = f"{config.authorize_url}?{urlencode(params)}"
+        request.scope["query_string"] = b""
+        return RedirectResponse(entra, status_code=302)
+
+    @mcp.custom_route("/token", methods=["POST"])
+    async def _token_proxy(request: Request) -> Response:
+        form = await request.form()
+        raw = {key: str(value) for key, value in form.multi_items()}
+        body = {key: value for key, value in raw.items() if key in _ENTRA_TOKEN_PARAMS}
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                upstream = await client.post(config.token_url, data=body)
+        except httpx.HTTPError:
+            log.warning("Entra token proxy unavailable")
+            return JSONResponse(
+                {"error": "temporarily_unavailable"},
+                status_code=503,
+                headers={"cache-control": "no-store", "pragma": "no-cache"},
+            )
+        headers = {
+            "content-type": upstream.headers.get("content-type", "application/json"),
+            "cache-control": upstream.headers.get("cache-control", "no-store"),
+            "pragma": upstream.headers.get("pragma", "no-cache"),
+        }
+        return Response(
+            content=upstream.content,
+            status_code=upstream.status_code,
+            headers=headers,
+        )

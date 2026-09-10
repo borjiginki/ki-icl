@@ -13,9 +13,30 @@ to unwrap an exception out of, and the header contents are part of the contract.
 
 from __future__ import annotations
 
+from urllib.parse import parse_qs, urlparse
+
+import httpx
 import pytest
 
 from tests.conftest import INITIALIZE
+from tests.test_entra_auth import _set_valid_entra_env
+
+
+def _facade_http_app(monkeypatch):
+    """A dedicated FastMCP that exposes the Entra OAuth facade without build_server.
+
+    Task 3 is what wires auth_app("entra"). These tests prove the routes themselves.
+    """
+    from fastmcp import FastMCP
+
+    from server import entra_auth
+
+    _set_valid_entra_env(monkeypatch)
+    monkeypatch.setenv("KI_ICL_AUTH", "entra")
+    config = entra_auth.entra_config_from_env()
+    mcp = FastMCP(auth=entra_auth.EntraAuthProvider(config))
+    entra_auth.register_oauth_routes(mcp, config)
+    return mcp.http_app(path="/mcp"), config
 
 
 async def test_a_valid_token_reaches_the_tools(auth_app, over_http):
@@ -94,6 +115,120 @@ async def test_with_auth_off_there_is_no_gate_at_all(auth_app, over_http):
         names = {t.name for t in await client.list_tools()}
 
     assert "list_domains" in names
+
+
+# --- Entra OAuth facade (routes registered directly; Task 3 wires build_server)
+
+
+async def test_protected_resource_metadata_is_served_over_http(raw_http, monkeypatch):
+    app, config = _facade_http_app(monkeypatch)
+
+    async with raw_http(app) as client:
+        response = await client.get("/.well-known/oauth-protected-resource")
+
+    assert response.status_code == 200
+    meta = response.json()
+    assert meta["resource"] == "https://icl.example/mcp"
+    assert meta["authorization_servers"] == ["https://icl.example/"]
+    assert meta["scopes_supported"] == [config.scope]
+
+
+async def test_authorize_redirects_to_entra_without_login_hint(raw_http, monkeypatch):
+    app, config = _facade_http_app(monkeypatch)
+
+    async with raw_http(app) as client:
+        response = await client.get(
+            "/authorize",
+            params={
+                "client_id": "c",
+                "response_type": "code",
+                "redirect_uri": "https://claude.ai/x",
+                "scope": "",
+                "login_hint": "person@ki.group",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    location = urlparse(response.headers["location"])
+    assert location.netloc == "login.microsoftonline.com"
+    assert location.path == f"/{config.tenant_id}/oauth2/v2.0/authorize"
+    query = parse_qs(location.query)
+    assert query["scope"] == [config.default_authorize_scope]
+    assert query["client_id"] == ["c"]
+    assert "login_hint" not in query
+    assert "person@ki.group" not in response.headers["location"]
+
+
+async def test_token_proxy_forwards_allowlisted_fields_and_drops_resource(
+    raw_http, monkeypatch
+):
+    app, config = _facade_http_app(monkeypatch)
+    captured: dict = {}
+    real_post = httpx.AsyncClient.post
+
+    async def fake_post(self, url, data=None, **kwargs):
+        if "login.microsoftonline.com" not in str(url):
+            return await real_post(self, url, data=data, **kwargs)
+        captured["url"] = url
+        captured["data"] = dict(data) if data is not None else {}
+        return httpx.Response(
+            200, json={"access_token": "tok", "token_type": "Bearer"}
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    async with raw_http(app) as client:
+        response = await client.post(
+            "/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": "abc",
+                "client_secret": "s3cret",
+                "resource": "https://icl.example/mcp",
+                "client_id": "c",
+                "redirect_uri": "https://claude.ai/x",
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+
+    assert response.status_code == 200
+    assert captured["url"] == config.token_url
+    assert captured["data"]["grant_type"] == "authorization_code"
+    assert captured["data"]["code"] == "abc"
+    assert captured["data"]["client_secret"] == "s3cret"
+    assert captured["data"]["client_id"] == "c"
+    assert "resource" not in captured["data"]
+
+
+async def test_token_proxy_returns_503_when_entra_is_unavailable(
+    raw_http, monkeypatch
+):
+    app, _config = _facade_http_app(monkeypatch)
+    real_post = httpx.AsyncClient.post
+
+    async def boom(self, url, data=None, **kwargs):
+        if "login.microsoftonline.com" not in str(url):
+            return await real_post(self, url, data=data, **kwargs)
+        raise httpx.ConnectError("entra down")
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", boom)
+
+    async with raw_http(app) as client:
+        response = await client.post(
+            "/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": "abc",
+                "client_secret": "s3cret",
+                "resource": "https://icl.example/mcp",
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+
+    assert response.status_code == 503
+    assert response.json() == {"error": "temporarily_unavailable"}
+    assert response.headers["cache-control"] == "no-store"
 
 
 # --- what the log says about the caller -------------------------------------

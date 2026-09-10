@@ -198,3 +198,21 @@ async def test_a_wrong_tenant_token_is_rejected_without_logging_claims(
     assert "someone@kigroup.de" not in caplog.text
     assert "secret.jwt.token" not in caplog.text
     assert "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" not in caplog.text
+
+
+def test_protected_resource_metadata_names_this_host(monkeypatch):
+    _set_valid_entra_env(monkeypatch)
+    config = entra_auth.entra_config_from_env()
+    meta = entra_auth.protected_resource_metadata(config)
+    assert meta["resource"] == "https://icl.example/mcp"
+    assert meta["authorization_servers"] == ["https://icl.example/"]
+    assert meta["scopes_supported"] == [config.scope]
+
+
+def test_oauth_metadata_points_authorize_and_token_at_this_host(monkeypatch):
+    _set_valid_entra_env(monkeypatch)
+    config = entra_auth.entra_config_from_env()
+    meta = entra_auth.oauth_metadata(config)
+    assert meta["authorization_endpoint"] == "https://icl.example/authorize"
+    assert meta["token_endpoint"] == "https://icl.example/token"
+    assert "login.microsoftonline.com" not in meta["issuer"]
