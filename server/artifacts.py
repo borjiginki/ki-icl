@@ -208,6 +208,73 @@ def _not_found_domain(domain: str, *, principal: Principal, policy: Policy) -> d
 # --- payloads ---------------------------------------------------------------
 
 
+# --- facets -----------------------------------------------------------------
+
+
+def _facet_specs(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """The axes this domain declares, or {} for a flat one.
+
+    Declaring facets is what switches the two-stage contract on, so a domain that
+    declares none answers exactly as it did before this existed.
+    """
+    specs = manifest.get("facets")
+    return specs if isinstance(specs, dict) else {}
+
+
+def _row_values(row: dict[str, Any], facet: str) -> list[str]:
+    """Every value a row carries for one facet. A single value reads as a list of one."""
+    value = (row.get("facets") or {}).get(facet)
+    values = value if isinstance(value, list) else [value]
+    return [v for v in values if isinstance(v, str) and v]
+
+
+def _facet_index(
+    rows: list[dict[str, Any]], specs: dict[str, dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    """Each axis, its description, and its values with counts, over the rows GIVEN.
+
+    Derived from already-redacted rows on every request, never precomputed into the
+    manifest. A precomputed count would tell a caller that a value exists behind rows
+    they may not read, which is exactly the disclosure the domain compartments in
+    access-policy.yaml prevent. Ordered by descending count, then alphabetically, so
+    the payload is byte-stable and the agent reads the big groups first.
+    """
+    index = {}
+    for facet, spec in specs.items():
+        counts: dict[str, int] = {}
+        for row in rows:
+            for value in _row_values(row, facet):
+                counts[value] = counts.get(value, 0) + 1
+        index[facet] = {
+            "description": spec.get("description", ""),
+            **({"multi": True} if spec.get("multi") else {}),
+            "values": dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))),
+        }
+    return index
+
+
+def _parse_group(group: str | list[str]) -> list[tuple[str, str]] | None:
+    """`"facet:value"` or a list of them, into pairs. None when any one is malformed.
+
+    None is a refusal rather than an empty filter list on purpose: a typo'd filter that
+    silently matched everything would hand back the whole domain, which is the cost this
+    whole change exists to remove.
+    """
+    items = [group] if isinstance(group, str) else list(group)
+    filters = []
+    for item in items:
+        facet, sep, value = str(item).partition(":")
+        if not sep or not facet.strip() or not value.strip():
+            return None
+        filters.append((facet.strip(), value.strip()))
+    return filters
+
+
+def _row_matches(row: dict[str, Any], filters: list[tuple[str, str]]) -> bool:
+    """True when the row carries every filter's value. Filters are ANDed."""
+    return all(value in _row_values(row, facet) for facet, value in filters)
+
+
 def list_domains_payload(*, principal: Principal, policy: Policy) -> dict[str, Any]:
     """The cold-start entry point. One row per domain this caller may read.
 
@@ -255,38 +322,135 @@ def _review_caveat(rows: list[dict[str, Any]]) -> str:
 
 
 def domain_manifest_payload(
-    domain: str, *, principal: Principal, policy: Policy
+    domain: str,
+    *,
+    principal: Principal,
+    policy: Policy,
+    group: str | list[str] | None = None,
 ) -> dict[str, Any]:
-    """One domain's metadata plus one row per readable artifact. No file bodies."""
+    """One domain's metadata, then either its facet index or one group's rows.
+
+    Three answers, and which one you get depends only on the domain and the call:
+
+      * a domain declaring facets, called with no `group`: the index, no rows
+      * a domain declaring facets, called with `group`: only the matching rows
+      * a domain declaring none: every readable row, exactly as before
+
+    No file bodies in any of them.
+    """
     for name, _, manifest in _readable_domains(principal=principal, policy=policy):
-        if name == domain:
-            rows = manifest["artifacts"]
+        if name != domain:
+            continue
+        rows = manifest["artifacts"]
+        specs = _facet_specs(manifest)
+
+        if group is None:
+            if not specs:
+                return _flat_manifest(name, manifest, rows)
             return {
                 "domain": name,
                 "description": manifest.get("description", ""),
                 "owner": manifest.get("owner"),
-                "artifacts": rows,
-                # A domain with nothing readable in it is a normal state, and telling an
-                # agent to fetch from it would be a dead end. The gap is the only useful
-                # thing it can do here, and the only way this domain learns.
-                #
-                # The wording is caller-relative on purpose. A genuinely empty domain and
-                # one whose every row was filtered must render IDENTICALLY, or the
-                # difference is an enumeration oracle: walk the domains and learn which
-                # hold something hidden. "Nothing is published yet" would be false in the
-                # filtered case; "nothing available to you" is true in both.
+                "artifact_count": len(rows),
+                "facets": _facet_index(rows, specs),
                 "fetch_hint": (
-                    f'Fetch with `get_artifact("{name}", ["<id>"])`.'
-                    + _review_caveat(rows)
-                    if rows
-                    else (
-                        f"Nothing in `{name}` is available to you. Tell the user it is "
-                        f'not available, and record the need with `report_gap("{name}", '
-                        f'"<topic>")`. Do not answer from another domain.'
-                    )
+                    f"Call again with one or more filters to list artifacts, for example "
+                    f'`get_domain_manifest("{name}", group="<facet>:<value>")`. Pass a list '
+                    f"to narrow further; several filters are ANDed, which is much cheaper "
+                    f"than listing a whole group. Then fetch with "
+                    f'`get_artifact("{name}", ["<id>"])`.'
                 ),
             }
+
+        filters = _parse_group(group)
+        if filters is None:
+            return _bad_group(name, specs, rows, reason="malformed")
+        for facet, value in filters:
+            if facet not in specs:
+                return _bad_group(name, specs, rows, reason="facet", facet=facet)
+            if value not in _facet_index(rows, specs)[facet]["values"]:
+                return _bad_group(name, specs, rows, reason="value", facet=facet)
+
+        matched = [row for row in rows if _row_matches(row, filters)]
+        return {
+            "domain": name,
+            "description": manifest.get("description", ""),
+            "owner": manifest.get("owner"),
+            "group": [f"{facet}:{value}" for facet, value in filters],
+            "artifacts": matched,
+            "fetch_hint": (
+                f'Fetch with `get_artifact("{name}", ["<id>"])`.' + _review_caveat(matched)
+                if matched
+                else (
+                    "No artifact carries all of those filters. Drop one and try again, or "
+                    "read the index by calling this without `group`. Do not report a gap "
+                    "for a combination of filters."
+                )
+            ),
+        }
     return _unserved_domain(domain, principal=principal, policy=policy)
+
+
+def _flat_manifest(
+    name: str, manifest: dict[str, Any], rows: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """The pre-facet answer, unchanged, for a domain that declares no axes."""
+    return {
+        "domain": name,
+        "description": manifest.get("description", ""),
+        "owner": manifest.get("owner"),
+        "artifacts": rows,
+        # A domain with nothing readable in it is a normal state, and telling an
+        # agent to fetch from it would be a dead end. The gap is the only useful
+        # thing it can do here, and the only way this domain learns.
+        #
+        # The wording is caller-relative on purpose. A genuinely empty domain and
+        # one whose every row was filtered must render IDENTICALLY, or the
+        # difference is an enumeration oracle: walk the domains and learn which
+        # hold something hidden. "Nothing is published yet" would be false in the
+        # filtered case; "nothing available to you" is true in both.
+        "fetch_hint": (
+            f'Fetch with `get_artifact("{name}", ["<id>"])`.' + _review_caveat(rows)
+            if rows
+            else (
+                f"Nothing in `{name}` is available to you. Tell the user it is "
+                f'not available, and record the need with `report_gap("{name}", '
+                f'"<topic>")`. Do not answer from another domain.'
+            )
+        ),
+    }
+
+
+def _bad_group(
+    name: str,
+    specs: dict[str, dict[str, Any]],
+    rows: list[dict[str, Any]],
+    *,
+    reason: str,
+    facet: str = "",
+) -> dict[str, Any]:
+    """A filter this caller did not get, and one step back to a working call.
+
+    `known_values` is computed from readable rows, so an unknown value and a value
+    whose every row is denied answer identically. That keeps a mistyped filter from
+    being a cheaper way to enumerate than the honest path.
+    """
+    index = _facet_index(rows, specs)
+    hints = {
+        "malformed": 'A filter is written `"<facet>:<value>"`, for example `"sector:aviation"`.',
+        "facet": f"`{facet}` is not one of this domain's facets.",
+        "value": f"No readable artifact in `{name}` carries that `{facet}`.",
+    }
+    return {
+        "status": "not_found",
+        "domain": name,
+        "known_facets": sorted(specs),
+        **({"known_values": index[facet]["values"]} if facet in index else {}),
+        "fetch_hint": (
+            hints[reason]
+            + f' Call `get_domain_manifest("{name}")` with no group to read the index.'
+        ),
+    }
 
 
 def get_artifact_payload(
