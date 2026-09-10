@@ -176,7 +176,8 @@ server/identity.py                  claims -> Principal, and the only module hol
 server/mcp_server.py                throwaway harness. Replaced by ki-mcp's tool registry.
 scripts/demo.py                     the acceptance demo, over a real MCP client
 scripts/usage_report.py             reads logs/usage.jsonl
-scripts/dashboard.py                the usage dashboard
+server/dashboard.py                 usage aggregation, and the /dashboard routes when they are switched on
+scripts/dashboard.py                the same dashboard, on loopback, needing no server
 deploy/                             Terraform: the app, the Files share, the ki-ccl publish runner
 ```
 
@@ -293,14 +294,25 @@ Two properties worth keeping:
 - **No tool knows about it.** It is FastMCP middleware, so adding a tool needs no logging code and no allowlist entry, and logging cannot fall out of step with the tool list. A logging failure is swallowed: it must stay an annoyance, never an outage.
 - **The caller is recorded as a keyed pseudonym.** `actor` is `HMAC(key, oid)` truncated to 12 hex characters, minted in [server/identity.py](server/identity.py), which is the only module that ever holds a raw Entra object id. With no key configured the field is absent rather than null, so a stretch of log without one cannot be mistaken for a person, and neither authentication nor authorization depends on the key. A pseudonym is still personal data: the Art. 6 basis, the 90-day retention and the works council position are in [access control](#access-control) below. What is still never recorded: a name, an email, a UPN, an IP, the raw object id, or the user's question.
 
-Sinks are stderr plus `logs/usage.jsonl`. Set `CONTEXT_USAGE_LOG=""` to leave stderr as the only one, which is what production wants: stdout is already collected by Log Analytics and a file would be a second store to own.
+Sinks are stderr plus `logs/usage.jsonl`. Set `CONTEXT_USAGE_LOG=""` to leave stderr as the only one, which is what production wants: stdout is already collected by Log Analytics and a file would be a second store to own. The deployed dashboard is the one exception and sets a path again, because it reads the file rather than the workspace; that copy lives in the container's writable layer and dies with the revision, so Log Analytics stays the only store anybody owns.
 
 ### The dashboard
+
+Two hosts, one page, one set of functions.
 
 `make dashboard` serves [scripts/dashboard.py](scripts/dashboard.py) on `:8010`.
 It reads the log file directly, so it needs no MCP server running, and it re-polls every three seconds so records appear while you test.
 
-All aggregation is pure Python functions over a list of records, covered by tests; [server/dashboard.html](server/dashboard.html) only renders what it is handed.
+`KI_ICL_DASHBOARD=1` mounts the same thing at `/dashboard` on the server's own port, behind whatever ingress the server is behind (`make serve-http-dashboard` locally, and `dashboard_enabled = true` in [deploy/](deploy/) for the Azure app).
+Unset, not one of those routes is registered, which is the default everywhere.
+
+All aggregation is pure Python functions over a list of records in [server/dashboard.py](server/dashboard.py), covered by tests; [server/dashboard.html](server/dashboard.html) only renders what it is handed, and addresses its endpoints relative to wherever it was served from so one file works under both hosts.
+
+**The mounted dashboard is not access-controlled, and two things about it are worse than merely unauthenticated.**
+Its catalog panel comes from `live_catalog`, which reads `_manifest.json` directly and lists every artifact id in the corpus regardless of who may read it, because it describes the corpus rather than answering a caller.
+And `/dashboard/purge` rewrites the usage log, which is the only route in the system that edits the audit trail.
+So the ingress in front of it is the entire gate.
+That is a disclosed trade for a demo reached from one allow-listed address, on the same footing as `external_ingress_enabled` itself, and it is why the server refuses the switch outright in `entra` mode and Terraform refuses the same combination: an IP allow-list stops being a defensible gate the moment there are real identities to gate.
 
 | Panel | The question it answers |
 |---|---|
@@ -405,7 +417,7 @@ Engineering does not block on these, but production does.
 - **Art. 6(1)(f)** legitimate interests, with a written balancing test. Consent is not available in an employment relationship. German employee data is additionally governed by §26 BDSG and Art. 88 GDPR, and the DPO confirms the provision and its numbering rather than this file.
 - **§87(1) no. 6 BetrVG co-determination.** A per-person read log over `team` content (personnel and staffing profiles) is objectively *suitable for* monitoring employee behaviour, and suitability is assessed regardless of intent. Betriebsrat consultation, in practice a Betriebsvereinbarung, comes before the log has data in it. [project-status-reporting](https://github.com/ki-group-gmbh/ki-ccl/blob/main/domains/method/project-status-reporting/README.md#progress-belongs-to-the-project-never-to-a-person) already reasoned about this same boundary for status reporting, and the consultation goes better carrying that reasoning.
 - **The control that makes the purpose limitation real: no tool here aggregates by actor.** Neither the dashboard nor `make usage` has a per-actor ranking, volume chart, or actor dimension, and `test_no_aggregation_groups_by_actor` fails if one is added. This log answers "did access control hold", never "how much did this person read".
-- **Retention 90 days**, enforced where the store is: production sets `CONTEXT_USAGE_LOG=""` so Log Analytics is the only store, with workspace retention set there and the workspace pinned to an EU region. Token validation is local and the JWKS fetch carries only public signing keys, so there is no Art. 44 transfer in the auth path.
+- **Retention 90 days**, enforced where the store is: production sets `CONTEXT_USAGE_LOG=""` so Log Analytics is the only store, with workspace retention set there and the workspace pinned to an EU region. The deployed dashboard sets that variable to a path again, and does not change this: the file is in the container's writable layer, it dies with the revision, nothing reads it but `/dashboard`, and Log Analytics still receives every line. It is also mutually exclusive with `auth_mode = "entra"`, so it can never coexist with a log that records an actor. Token validation is local and the JWKS fetch carries only public signing keys, so there is no Art. 44 transfer in the auth path.
 - **Not an Annex III high-risk AI system**, and the reason is worth keeping: no automated decision about a person, no profile, no ranking or score. Any future feature that ranks, scores or compares people changes that classification.
 - `KI_ICL_AUDIT_KEY` is a secret. Key Vault or a container-app secret, never this repo and never `~/.claude.json`, which is a plaintext home-directory file that gets backed up and synced.
 

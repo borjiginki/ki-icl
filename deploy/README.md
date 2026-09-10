@@ -247,6 +247,28 @@ From your own machine, once reachable:
 claude mcp add --transport http ki-icl-azure "$(terraform output -raw mcp_url)"
 ```
 
+### The usage dashboard
+
+Off by default. When it is on, it is at `/dashboard` on the same host, port, ingress and allow-list as `/mcp`:
+
+```bash
+gh variable set DASHBOARD_ENABLED --body true
+gh workflow run deploy.yml --ref main
+terraform output dashboard_url
+```
+
+Demo scaffolding, and treated as such by three preconditions that fail the plan rather than warn.
+It needs `external_ingress_enabled` (otherwise nobody can reach it), it needs `max_replicas = 1` (each replica writes its own usage file, so above one the page shows a partial picture with nothing on it saying so, and the Deploy workflow passes the value alongside the switch), and it is refused outright with `auth_mode = "entra"`.
+
+That last one is the important one.
+The dashboard has no authentication of its own, its catalog panel lists every artifact id in the corpus regardless of grants, and `/dashboard/purge` rewrites the usage log, so the IP allow-list is the entire gate.
+That is defensible for a demo reached from one address with `auth_mode` still `off` and no actor recorded anywhere; it stops being defensible the moment real identities exist, which is what the precondition encodes.
+[server/mcp_server.py](../server/mcp_server.py) refuses the same pair at startup, so an `az containerapp update` that sets the environment variable by hand produces a revision that will not start rather than one that quietly serves it.
+
+Switching it on also sets `CONTEXT_USAGE_LOG` to a path, which turns the file sink back on alongside stderr.
+Log Analytics still receives every line, and the file is an ephemeral copy in the container's own writable layer that dies with the revision, so the audit store and its retention are unchanged.
+The practical consequence is that a redeploy resets what the dashboard shows.
+
 Once `auth_mode = entra`, Claude Code will run the OAuth flow against Entra.
 Whether it can do that against a tenant with no dynamic client registration needs checking against the real client, and `--client-id` exists for exactly that case.
 
@@ -273,11 +295,12 @@ trusting the plan's own summary line, and that is exactly the kind of surprise t
 gate exists to catch before it reaches real infrastructure unattended.
 
 **External ingress is declared from repository settings, not from a local apply.**
-`deploy/ci.auto.tfvars` carries the baseline every apply needs (`create_role_assignments = false`, `acr_pull_confirmed = true`), and the two ingress variables come from this repository's Actions settings instead: the variable `EXTERNAL_INGRESS_ENABLED`, and the secret `ALLOWED_CLIENT_CIDRS` holding the allow-list as JSON.
+`deploy/ci.auto.tfvars` carries the baseline every apply needs (`create_role_assignments = false`, `acr_pull_confirmed = true`), and the switches come from this repository's Actions settings instead: the variables `EXTERNAL_INGRESS_ENABLED` and `DASHBOARD_ENABLED`, and the secret `ALLOWED_CLIENT_CIDRS` holding the allow-list as JSON.
 
 ```bash
 gh variable set EXTERNAL_INGRESS_ENABLED --body true
 gh secret set ALLOWED_CLIENT_CIDRS --body '[{"name":"someone","cidr":"203.0.113.7/32","description":"why"}]'
+gh variable set DASHBOARD_ENABLED --body true
 ```
 
 This was a manual override at first, on the theory that CI had no business opening the app to the internet.
