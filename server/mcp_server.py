@@ -369,6 +369,14 @@ def refuse_unsafe_start(*, http: bool, host: str) -> None:
         )
     if mode == "entra" and os.environ.get("KI_ICL_DEV_PRINCIPAL", "").strip():
         raise SystemExit("KI_ICL_DEV_PRINCIPAL is refused in entra mode.")
+    if mode == "entra" and dashboard_from_env():
+        raise SystemExit(
+            "KI_ICL_DASHBOARD is refused in entra mode. The dashboard has no "
+            "authentication of its own, and its catalog panel lists every artifact id "
+            "in the corpus regardless of grants, so it must not be reachable once "
+            "there are real identities to gate. deploy/variables.tf refuses the same "
+            "combination; this is the copy that survives an out-of-band update."
+        )
     if mode == "demo" and http and host not in ("127.0.0.1", "::1", "localhost"):
         raise SystemExit(f"demo tokens are loopback-only; refusing to bind {host}.")
     # A policy that does not load becomes deny-all at runtime, which is the right
@@ -430,6 +438,14 @@ def startup_lines(*, host: str, port: int, http: bool, mode: access.Mode) -> lis
             f"WARNING: serving UNAUTHENTICATED on {host}:{port}. Every caller that can "
             f"reach this port reads the whole corpus. Only the surrounding network is "
             f"stopping them, and this process cannot tell whether there is one."
+        )
+    if http and dashboard_from_env() and host not in LOOPBACK:
+        lines.append(
+            f"WARNING: the usage dashboard is mounted at http://{host}:{port}/dashboard. "
+            f"It lists every artifact id in the corpus regardless of grants, and "
+            f"/dashboard/purge rewrites the usage log. It has no authentication of its "
+            f"own; only the surrounding network is stopping anyone who can reach this "
+            f"port."
         )
     if identity.audit_key_from_env() is None:
         lines.append(
