@@ -211,6 +211,32 @@ def filter_records(
     return out
 
 
+def query_window(domain: str = "", hours: str = "") -> dict[str, Any]:
+    """The two filter arguments `filter_records` takes, from raw query strings.
+
+    A non-numeric `hours` means no window rather than an exception. It arrives from a
+    URL somebody typed, and on the deployed host an unhandled one is a 500 with a
+    traceback on an endpoint reachable from the allow-list.
+    """
+    try:
+        window = float(hours or 0)
+    except ValueError:
+        window = 0.0
+    return {"domain": domain, "hours": window}
+
+
+def demand_baseline(key: str) -> int:
+    """The demand behind `key` right now, for `curate` to record as its baseline.
+
+    Computed from the log rather than taken from the request, because the baseline is
+    meant to be the demand the person was actually looking at when they decided. A
+    client-supplied number would let a stale page record one that was never on screen.
+    """
+    current = aggregate(read_records(LOG), curation=read_curation(CURATION))
+    counts = {row["key"]: row["count"] for row in current["misses"] + current["curated"]}
+    return counts.get(key, 0)
+
+
 def _utcnow() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
@@ -559,3 +585,68 @@ def live_catalog() -> dict[str, Any] | None:
     # corpus is empty. Overriding a real logged snapshot with that would turn a
     # misconfiguration into "nothing exists", which is worse than knowing nothing.
     return record if record["artifact_count"] else None
+
+
+def register(mcp: Any) -> None:
+    """Mount the dashboard on an existing FastMCP server, at /dashboard.
+
+    **These routes are not access-controlled, and two of them are worse than that.**
+    `/dashboard/data` carries `live_catalog`, which lists every artifact id in the
+    corpus regardless of who may read it, and `/dashboard/purge` rewrites the usage
+    log. Whatever ingress this sits behind is the entire gate, which is why the
+    composition root has to ask for it explicitly, why `refuse_unsafe_start` refuses it
+    in entra mode, and why deploy/variables.tf defaults it off.
+
+    Starlette is imported here rather than at module scope so `scripts/dashboard.py`,
+    which needs none of it, keeps its stdlib-only import list.
+    """
+    from starlette.requests import Request
+    from starlette.responses import HTMLResponse, JSONResponse, Response
+
+    def _body_key_and_state(raw: bytes) -> tuple[str, str] | None:
+        """`(key, state)` from a request body, or None for anything unparseable."""
+        try:
+            body = json.loads(raw or b"{}")
+        except ValueError:
+            return None
+        if not isinstance(body, dict):
+            return None
+        return str(body.get("key", "")), str(body.get("state", ""))
+
+    @mcp.custom_route("/dashboard", methods=["GET"], include_in_schema=False)
+    async def page(request: Request) -> Response:
+        return HTMLResponse(PAGE.read_bytes(), headers={"Cache-Control": "no-store"})
+
+    @mcp.custom_route("/dashboard/data", methods=["GET"], include_in_schema=False)
+    async def data(request: Request) -> Response:
+        records = filter_records(
+            read_records(LOG),
+            **query_window(
+                domain=request.query_params.get("domain", ""),
+                hours=request.query_params.get("hours", ""),
+            ),
+        )
+        return JSONResponse(
+            aggregate(records, curation=read_curation(CURATION), catalog=live_catalog()),
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @mcp.custom_route("/dashboard/curate", methods=["POST"], include_in_schema=False)
+    async def curate_route(request: Request) -> Response:
+        parsed = _body_key_and_state(await request.body())
+        if parsed is None:
+            return Response(status_code=400)
+        key, state = parsed
+        if not key or state not in CURATION_STATES:
+            return Response(status_code=400)
+        return JSONResponse(curate(CURATION, key, state, demand_baseline(key)))
+
+    @mcp.custom_route("/dashboard/purge", methods=["POST"], include_in_schema=False)
+    async def purge_route(request: Request) -> Response:
+        parsed = _body_key_and_state(await request.body())
+        if parsed is None:
+            return Response(status_code=400)
+        key, _ = parsed
+        if not key:
+            return Response(status_code=400)
+        return JSONResponse(purge(LOG, CURATION, key))

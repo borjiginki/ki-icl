@@ -32,9 +32,11 @@ from server.dashboard import (  # noqa: E402
     PAGE,
     aggregate,
     curate,
+    demand_baseline,
     filter_records,
     live_catalog,
     purge,
+    query_window,
     read_curation,
     read_records,
 )
@@ -48,8 +50,10 @@ class Handler(BaseHTTPRequestHandler):
             query = parse_qs(urlparse(self.path).query)
             records = filter_records(
                 read_records(LOG),
-                domain=query.get("domain", [""])[0],
-                hours=float(query.get("hours", ["0"])[0] or 0),
+                **query_window(
+                    domain=query.get("domain", [""])[0],
+                    hours=query.get("hours", [""])[0],
+                ),
             )
             payload = aggregate(
                 records,
@@ -90,12 +94,8 @@ class Handler(BaseHTTPRequestHandler):
         if state not in CURATION_STATES:
             self.send_error(400)
             return
-        # Baseline computed here, not taken from the client: it is the demand the
-        # person was actually looking at when they made the decision.
-        current = aggregate(read_records(LOG), curation=read_curation(CURATION))
-        counts = {r["key"]: r["count"] for r in current["misses"] + current["curated"]}
         self._send(
-            json.dumps(curate(CURATION, key, state, counts.get(key, 0))).encode(),
+            json.dumps(curate(CURATION, key, state, demand_baseline(key))).encode(),
             "application/json",
         )
 

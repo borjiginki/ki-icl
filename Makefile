@@ -1,4 +1,4 @@
-.PHONY: help install test serve serve-http serve-http-demo serve-as demo inspector usage dashboard
+.PHONY: help install test serve serve-http serve-http-demo serve-http-dashboard serve-as demo inspector usage dashboard
 
 PY := .venv/bin/python
 
@@ -15,6 +15,7 @@ help:
 	@echo "  serve       run the MCP server over stdio, serving CONTEXT_ROOT"
 	@echo "  serve-http  same, over HTTP on 127.0.0.1:8000/mcp, unauthenticated"
 	@echo "  serve-http-demo  over HTTP, authenticated with the demo identities"
+	@echo "  serve-http-dashboard  same, with the usage dashboard at /dashboard"
 	@echo "  serve-as    over stdio as a demo identity, with enforcement on"
 	@echo "  demo        walk the acceptance demo end to end against CONTEXT_ROOT"
 	@echo "  inspector   serve over HTTP and open MCP Inspector against it"
@@ -40,6 +41,14 @@ serve:
 # that does not come up rather than one that serves everything to anyone.
 serve-http:
 	CONTEXT_ROOT=$(CONTEXT_ROOT) KI_ICL_AUTH=off $(PY) server/mcp_server.py --http
+
+# The dashboard on the server's own port, mounted exactly as the deployment mounts it,
+# so what you check locally is what the allow-list reaches. CONTEXT_USAGE_LOG is set
+# because the server defaults the file sink on but the deployment does not: this target
+# exists to match the deployed shape, so it says so rather than relying on the default.
+serve-http-dashboard:
+	CONTEXT_ROOT=$(CONTEXT_ROOT) KI_ICL_AUTH=off KI_ICL_DASHBOARD=1 \
+	  CONTEXT_USAGE_LOG=logs/usage.jsonl $(PY) server/mcp_server.py --http
 
 # Authenticated with the fake identities in config/demo_principals.yaml. Pass a token as
 # `Authorization: Bearer demo-token-<id>`; see that file for what each one proves.

@@ -61,6 +61,7 @@ from fastmcp.server.auth import AuthProvider  # noqa: E402
 from server import access  # noqa: E402
 from server import artifacts  # noqa: E402
 from server import identity  # noqa: E402
+from server.dashboard import register as register_dashboard  # noqa: E402
 
 # The module, not `from ... import USAGE_LOG`: importing the sink by value creates a
 # second binding that silently diverges from the one the middleware writes through.
@@ -125,12 +126,17 @@ def reader() -> dict[str, Any]:
     }
 
 
-def build_server(auth: AuthProvider | None = None) -> FastMCP:
+def build_server(auth: AuthProvider | None = None, dashboard: bool = False) -> FastMCP:
     """One configured server. The only place the tools are registered.
 
     `mask_error_details=True` is not tidiness: FastMCP returns exception text to the
     client verbatim by default, so a traceback naming an artifact id would disclose
     exactly what authorization exists to withhold.
+
+    `dashboard` mounts the usage dashboard at /dashboard, on this same app and port.
+    A parameter rather than an environment read, for the same reason `auth` is one:
+    this function reads no environment, the composition root decides, and a test can
+    mount the routes without touching `os.environ`.
     """
     mcp = FastMCP(name="ki-icl", instructions=INSTRUCTIONS, auth=auth, mask_error_details=True)
     mcp.add_middleware(ContextUsageMiddleware())
@@ -234,6 +240,9 @@ def build_server(auth: AuthProvider | None = None) -> FastMCP:
             indent=2,
         )
 
+    if dashboard:
+        register_dashboard(mcp)
+
     return mcp
 
 
@@ -250,6 +259,17 @@ _TENANT_PATTERN = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-
 def auth_mode() -> str:
     """`entra`, `demo`, `off`, or "" when unset. Never guessed into something safer."""
     return os.environ.get("KI_ICL_AUTH", "").strip().lower()
+
+
+def dashboard_from_env() -> bool:
+    """Whether to mount the usage dashboard. Off unless explicitly switched on.
+
+    Exactly "1", like KI_ICL_AUDIT_REQUIRED, rather than any truthy-looking string.
+    This one decides whether an unauthenticated view of the whole corpus index is
+    reachable, so "true", "yes" and "0 " should all fail closed rather than be guessed
+    at.
+    """
+    return os.environ.get("KI_ICL_DASHBOARD", "").strip() == "1"
 
 
 def _demo_auth() -> AuthProvider:
@@ -419,7 +439,7 @@ def startup_lines(*, host: str, port: int, http: bool, mode: access.Mode) -> lis
     return lines
 
 
-mcp = build_server(auth=auth_from_env())
+mcp = build_server(auth=auth_from_env(), dashboard=dashboard_from_env())
 
 
 if __name__ == "__main__":
