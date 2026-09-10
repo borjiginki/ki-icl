@@ -193,6 +193,11 @@ def clean_auth_env(monkeypatch):
         "KI_ICL_ENTRA_CLIENT_ID",
         "KI_ICL_ENTRA_BASE_URL",
         "KI_ICL_ENTRA_IDENTIFIER_URI",
+        "AZURE_TENANT_ID",
+        "AZURE_CLIENT_ID",
+        "AZURE_AUDIENCE",
+        "AZURE_SCOPE",
+        "MCP_BASE_URL",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(identity, "_AUDIT_KEY", b"test-audit-key-0123456789abcdef0123")

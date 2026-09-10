@@ -117,7 +117,7 @@ async def test_with_auth_off_there_is_no_gate_at_all(auth_app, over_http):
     assert "list_domains" in names
 
 
-# --- Entra OAuth facade (routes registered directly; Task 3 wires build_server)
+# --- Entra OAuth facade (hand-built FastMCP; build_server wiring is tested below)
 
 
 async def test_protected_resource_metadata_is_served_over_http(raw_http, monkeypatch):
@@ -467,15 +467,34 @@ def test_a_tenant_id_that_is_not_a_guid_is_refused_before_it_reaches_a_url(monke
 def test_entra_mode_needs_no_client_secret(monkeypatch):
     """The reason RemoteAuthProvider was chosen over AzureProvider: a pure resource
     server holds a public JWKS URL and nothing else, so there is no secret to store, to
-    rotate, or to leak. If this ever starts needing one, something has changed."""
+    rotate, or to leak. If this ever starts needing one, something has changed.
+
+    `client_secret` may still appear as an allowlisted token form field in
+    `entra_auth.py`. These two functions must not read one from the environment.
+    """
     import inspect
 
-    from server import mcp_server
+    from server import entra_auth, mcp_server
 
-    source = inspect.getsource(mcp_server._entra_auth)
+    for fn in (entra_auth.entra_config_from_env, mcp_server._entra_auth):
+        source = inspect.getsource(fn)
+        assert "AZURE_CLIENT_SECRET" not in source
+        assert "KI_ICL_CLIENT_SECRET" not in source
 
-    assert "client_secret" not in source
-    assert "SECRET" not in source
+
+async def test_entra_mode_serves_facade_metadata_through_build_server(
+    auth_app, raw_http, monkeypatch
+):
+    monkeypatch.setenv("AZURE_TENANT_ID", "cbd1a264-94b1-4d60-b0f6-ca149e7aef80")
+    monkeypatch.setenv("AZURE_CLIENT_ID", "11111111-1111-1111-1111-111111111111")
+    monkeypatch.setenv("MCP_BASE_URL", "https://icl.example")
+    app = auth_app("entra")
+    async with raw_http(app) as client:
+        response = await client.get("/.well-known/oauth-protected-resource")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["resource"] == "https://icl.example/mcp"
+    assert body["authorization_servers"] == ["https://icl.example/"]
 
 
 def test_a_tree_with_no_usable_policy_refuses_to_start(monkeypatch, tmp_path):

@@ -46,7 +46,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -60,6 +59,7 @@ from fastmcp.server.auth import AuthProvider  # noqa: E402
 
 from server import access  # noqa: E402
 from server import artifacts  # noqa: E402
+from server import entra_auth  # noqa: E402
 from server import identity  # noqa: E402
 
 # The module, not `from ... import USAGE_LOG`: importing the sink by value creates a
@@ -234,17 +234,15 @@ def build_server(auth: AuthProvider | None = None) -> FastMCP:
             indent=2,
         )
 
+    if isinstance(auth, entra_auth.EntraAuthProvider):
+        entra_auth.register_oauth_routes(mcp, auth.entra_config)
+
     return mcp
 
 
 # --- auth wiring ------------------------------------------------------------
 
 AUTH_MODES = ("entra", "demo", "off")
-
-# A tenant id reaches a URL, so it is validated before it gets there: an unchecked
-# value makes `KI_ICL_ENTRA_TENANT_ID=x/../../evil` a path injection into the key
-# source this server trusts to validate every token.
-_TENANT_PATTERN = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
 def auth_mode() -> str:
@@ -282,38 +280,7 @@ def _demo_auth() -> AuthProvider:
 
 def _entra_auth() -> AuthProvider:
     """A pure resource server against KI group's Entra tenant. Holds no secret."""
-    from fastmcp.server.auth import RemoteAuthProvider
-    from fastmcp.server.auth.providers.jwt import JWTVerifier
-
-    tenant = os.environ.get("KI_ICL_ENTRA_TENANT_ID", "").strip()
-    client_id = os.environ.get("KI_ICL_ENTRA_CLIENT_ID", "").strip()
-    base_url = os.environ.get("KI_ICL_ENTRA_BASE_URL", "").strip()
-    if not _TENANT_PATTERN.match(tenant):
-        raise SystemExit("KI_ICL_ENTRA_TENANT_ID must be a tenant GUID.")
-    if not client_id or not base_url:
-        raise SystemExit("entra mode needs KI_ICL_ENTRA_CLIENT_ID and KI_ICL_ENTRA_BASE_URL.")
-
-    identifier_uri = os.environ.get("KI_ICL_ENTRA_IDENTIFIER_URI", "").strip() or f"api://{client_id}"
-    issuer = f"https://login.microsoftonline.com/{tenant}/v2.0"
-
-    return RemoteAuthProvider(
-        token_verifier=JWTVerifier(
-            jwks_uri=f"https://login.microsoftonline.com/{tenant}/discovery/v2.0/keys",
-            issuer=issuer,
-            # Either form can land in `aud`, depending on how the client asked for the
-            # scope. Accepting both is what AzureProvider does, for the same reason.
-            audience=[client_id, identifier_uri],
-            # The SHORT name. Entra puts unprefixed scope names in `scp`; the full URI
-            # form belongs in `scopes_supported` below, which is what a client must
-            # request. Getting these two the wrong way round costs a day.
-            required_scopes=["context.read"],
-            ssrf_safe=True,
-        ),
-        authorization_servers=[issuer],
-        base_url=base_url,
-        scopes_supported=[f"{identifier_uri}/context.read"],
-        resource_name="ki-icl",
-    )
+    return entra_auth.EntraAuthProvider(entra_auth.entra_config_from_env())
 
 
 def auth_from_env() -> AuthProvider | None:
