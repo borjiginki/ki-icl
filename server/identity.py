@@ -90,6 +90,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from server.access import ANONYMOUS, DENY_REASONS, Mode, Principal
+from server.auth_env import expected_tenant_from_env
 
 log = logging.getLogger(__name__)
 
@@ -130,7 +131,7 @@ _AUDIT_KEY: bytes | None = audit_key_from_env()
 # Pinned separately from the issuer because JWTVerifier validates `iss` and never
 # `tid`. Cheap, and it survives somebody later setting the tenant to `organizations`.
 # Unset means no tenant check, which is what demo and local dev need.
-_EXPECTED_TENANT: str | None = os.environ.get("KI_ICL_ENTRA_TENANT_ID", "").strip() or None
+_EXPECTED_TENANT: str | None = expected_tenant_from_env()
 
 
 def _actor(oid: str, key: bytes) -> str:

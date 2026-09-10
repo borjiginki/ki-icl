@@ -47,7 +47,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -58,9 +57,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastmcp import FastMCP  # noqa: E402
 from fastmcp.server.auth import AuthProvider  # noqa: E402
+from starlette.requests import Request  # noqa: E402
+from starlette.responses import JSONResponse  # noqa: E402
 
 from server import access  # noqa: E402
 from server import artifacts  # noqa: E402
+from server import entra_auth  # noqa: E402
 from server import identity  # noqa: E402
 # The module rather than `from ... import register`, for the same reason as usage
 # below: startup_lines prints dashboard.LOG, and a path imported by value here would
@@ -244,6 +246,13 @@ def build_server(auth: AuthProvider | None = None, dashboard: bool = False) -> F
             indent=2,
         )
 
+    @mcp.custom_route("/health", methods=["GET"])
+    async def _health(_: Request) -> JSONResponse:
+        return JSONResponse({"status": "ok"})
+
+    if isinstance(auth, entra_auth.EntraAuthProvider):
+        entra_auth.register_oauth_routes(mcp, auth.entra_config)
+
     if dashboard:
         usage_dashboard.register(mcp)
 
@@ -253,11 +262,6 @@ def build_server(auth: AuthProvider | None = None, dashboard: bool = False) -> F
 # --- auth wiring ------------------------------------------------------------
 
 AUTH_MODES = ("entra", "demo", "off")
-
-# A tenant id reaches a URL, so it is validated before it gets there: an unchecked
-# value makes `KI_ICL_ENTRA_TENANT_ID=x/../../evil` a path injection into the key
-# source this server trusts to validate every token.
-_TENANT_PATTERN = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
 def auth_mode() -> str:
@@ -306,38 +310,7 @@ def _demo_auth() -> AuthProvider:
 
 def _entra_auth() -> AuthProvider:
     """A pure resource server against KI group's Entra tenant. Holds no secret."""
-    from fastmcp.server.auth import RemoteAuthProvider
-    from fastmcp.server.auth.providers.jwt import JWTVerifier
-
-    tenant = os.environ.get("KI_ICL_ENTRA_TENANT_ID", "").strip()
-    client_id = os.environ.get("KI_ICL_ENTRA_CLIENT_ID", "").strip()
-    base_url = os.environ.get("KI_ICL_ENTRA_BASE_URL", "").strip()
-    if not _TENANT_PATTERN.match(tenant):
-        raise SystemExit("KI_ICL_ENTRA_TENANT_ID must be a tenant GUID.")
-    if not client_id or not base_url:
-        raise SystemExit("entra mode needs KI_ICL_ENTRA_CLIENT_ID and KI_ICL_ENTRA_BASE_URL.")
-
-    identifier_uri = os.environ.get("KI_ICL_ENTRA_IDENTIFIER_URI", "").strip() or f"api://{client_id}"
-    issuer = f"https://login.microsoftonline.com/{tenant}/v2.0"
-
-    return RemoteAuthProvider(
-        token_verifier=JWTVerifier(
-            jwks_uri=f"https://login.microsoftonline.com/{tenant}/discovery/v2.0/keys",
-            issuer=issuer,
-            # Either form can land in `aud`, depending on how the client asked for the
-            # scope. Accepting both is what AzureProvider does, for the same reason.
-            audience=[client_id, identifier_uri],
-            # The SHORT name. Entra puts unprefixed scope names in `scp`; the full URI
-            # form belongs in `scopes_supported` below, which is what a client must
-            # request. Getting these two the wrong way round costs a day.
-            required_scopes=["context.read"],
-            ssrf_safe=True,
-        ),
-        authorization_servers=[issuer],
-        base_url=base_url,
-        scopes_supported=[f"{identifier_uri}/context.read"],
-        resource_name="ki-icl",
-    )
+    return entra_auth.EntraAuthProvider(entra_auth.entra_config_from_env())
 
 
 def auth_from_env() -> AuthProvider | None:
@@ -420,7 +393,14 @@ def bind_address() -> tuple[str, int]:
     return host, port
 
 
-def startup_lines(*, host: str, port: int, http: bool, mode: access.Mode) -> list[str]:
+def startup_lines(
+    *,
+    host: str,
+    port: int,
+    http: bool,
+    mode: access.Mode,
+    auth: AuthProvider | None = None,
+) -> list[str]:
     """What the operator sees on stderr at boot.
 
     A function rather than inline prints so the warnings can be tested. Each warning is
@@ -457,6 +437,12 @@ def startup_lines(*, host: str, port: int, http: bool, mode: access.Mode) -> lis
             "NOTE: no usable KI_ICL_AUDIT_KEY, so no actor is recorded. The log will "
             "say what was read, never by whom."
         )
+    if isinstance(auth, entra_auth.EntraAuthProvider):
+        config = auth.entra_config
+        lines.append(
+            f"entra tenant={config.tenant_id} client={config.client_id} "
+            f"base_url={config.base_url}"
+        )
     return lines
 
 
@@ -469,7 +455,9 @@ if __name__ == "__main__":
     refuse_unsafe_start(http=http, host=host)
 
     mode = identity.effective_mode()
-    for line in startup_lines(host=host, port=port, http=http, mode=mode):
+    for line in startup_lines(
+        host=host, port=port, http=http, mode=mode, auth=mcp.auth
+    ):
         print(line, file=sys.stderr)
 
     usage.USAGE_LOG.write(

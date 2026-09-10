@@ -86,6 +86,26 @@ def test_a_token_from_another_tenant_is_not_authenticated():
     assert p.roles == frozenset()
 
 
+def test_canonical_tenant_takes_precedence_over_conflicting_legacy_alias(monkeypatch):
+    from server import auth_env, identity
+
+    monkeypatch.setenv("AZURE_TENANT_ID", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    monkeypatch.setenv("KI_ICL_ENTRA_TENANT_ID", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    monkeypatch.setattr(
+        identity, "_EXPECTED_TENANT", auth_env.expected_tenant_from_env()
+    )
+
+    accepted = identity.principal_from_claims(
+        claims(tid="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), source="entra"
+    )
+    rejected = identity.principal_from_claims(
+        claims(tid="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"), source="entra"
+    )
+
+    assert accepted.authenticated
+    assert not rejected.authenticated
+
+
 def test_a_token_with_no_scp_is_rejected_as_app_only():
     """A delegated user token always carries `scp`; an app-only token carries `roles`
     and no `scp`. No human is accountable for an app-only token, so it must not read
