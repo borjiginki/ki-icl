@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -436,7 +437,11 @@ def test_the_page_addresses_its_endpoints_relative_to_where_it_is_served():
     assert 'const BASE = location.pathname.replace(/\\/+$/, "");' in page
     assert 'fetch(BASE + "/data?" + q)' in page
     assert 'fetch(BASE + (state === "purge" ? "/purge" : "/curate")' in page
-    assert 'fetch("/' not in page, "an absolute fetch cannot work under a path prefix"
+    # Either quote style: the page is hand-written and the single-quoted form would
+    # break under the prefix exactly the same way, silently.
+    assert not re.search(r"""fetch\(['"]/""", page), (
+        "an absolute fetch cannot work under a path prefix"
+    )
 
 
 def test_an_unset_or_blank_usage_log_variable_lands_on_the_file_the_writer_uses():

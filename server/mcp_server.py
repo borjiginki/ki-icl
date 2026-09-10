@@ -12,8 +12,9 @@ registered on the shared `mcp` instance beside the skills tools. Only the import
 **The server is built by a factory rather than at import time**, because FastMCP takes
 `auth=` only in the constructor. Without `build_server()` there would be no way to
 exercise more than one auth configuration in one process, and the HTTP auth tests could
-not exist. `mcp` is still bound at module level, because `tests/test_gaps.py` and
-`scripts/dashboard.py` import that name.
+not exist. `mcp` is still bound at module level, because `scripts/demo.py` and four of
+the test modules import that name. `scripts/dashboard.py` does not: it is a host for
+`server/dashboard.py` and imports nothing from here.
 
 ## Authentication is HTTP-only, and that is honest rather than a gap
 

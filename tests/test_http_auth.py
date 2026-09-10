@@ -470,6 +470,10 @@ def test_the_dashboard_is_allowed_alongside_unauthenticated_serving(served, monk
 
 
 def test_a_dashboard_on_a_wide_bind_is_announced_loudly(monkeypatch):
+    """Off loopback the dashboard is reachable by whatever can reach the port, and it
+    answers with the whole corpus index and a route that rewrites the usage log. The
+    operator has to be told at boot, because nothing in the page says it and the
+    process cannot tell whether an ingress is in front of it."""
     from server import access, dashboard, mcp_server
 
     monkeypatch.setenv("KI_ICL_AUTH", "off")

@@ -152,8 +152,9 @@ jobs:
           fi
           dashboard=false
           # The dashboard reads a usage file each replica writes for itself, so above
-          # one replica the page shows a partial picture. variables.tf makes that a hard
-          # precondition, and this array is what satisfies it.
+          # one replica the page shows a partial picture and below one it loses the file
+          # on every scale to zero. app.tf makes exactly one replica a hard precondition,
+          # and this array is what satisfies the ceiling; the floor already defaults to 1.
           replicas=()
           if [ "${{ vars.DASHBOARD_ENABLED }}" = "true" ]; then
             dashboard=true

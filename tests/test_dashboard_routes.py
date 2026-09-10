@@ -148,3 +148,57 @@ def test_purge_refuses_a_missing_key(log):
         response = client.post("/dashboard/purge", json={})
 
     assert response.status_code == 400
+
+
+def test_the_data_route_lists_artifact_ids_the_caller_could_never_read(
+    log, tmp_path, monkeypatch
+):
+    """The exposure the whole guard set exists to contain, pinned so it cannot be lost.
+
+    `/dashboard/data` carries `live_catalog`, which reads the manifests directly and
+    names every artifact in the corpus with no principal anywhere in the call, while
+    the same ids are refused to the same caller through /mcp. Four Terraform
+    preconditions, the entra refusal in `refuse_unsafe_start` and the wide-bind warning
+    all exist for that one payload, and until now nothing failed if a future change
+    quietly dropped it. That would leave every one of those guards reading as
+    superstition to whoever came next, and the likely response is to delete them.
+
+    So this test is here to be read as much as to be run: if it starts failing because
+    the catalog no longer leaks, the guards can go, and that is a decision to make
+    deliberately rather than by inference.
+    """
+    import yaml
+
+    from server import access, artifacts
+    from tests.conftest import VALID_POLICY, write_artifact, write_policy
+
+    corpus = tmp_path / "corpus"
+    team = corpus / "domains" / "team"
+    team.mkdir(parents=True)
+    write_artifact(team, "works-council-notes", README__md="# Confidential\n")
+    (team / "_manifest.json").write_text(
+        json.dumps(
+            {
+                "domain": "team",
+                "artifacts": [{"id": "works-council-notes", "version_id": "cccc3333"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    write_policy(corpus)
+    monkeypatch.setattr(artifacts, "ARTIFACTS_ROOT", corpus)
+
+    with TestClient(mcp_server.build_server(dashboard=True).http_app()) as client:
+        payload = client.get("/dashboard/data").json()
+
+    # The policy grants team to ctx.people alone, and nothing about reaching an
+    # allow-listed IP confers a role, so the dashboard's viewer is this caller.
+    refused = artifacts.get_artifact_payload(
+        "team",
+        ["works-council-notes"],
+        principal=access.ANONYMOUS,
+        policy=access.parse_policy(yaml.safe_load(VALID_POLICY), mode=access.Mode.ENFORCE),
+    )
+
+    assert refused["status"] == "forbidden"
+    assert "team/works-council-notes" in payload["catalog"]["artifacts"]

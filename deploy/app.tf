@@ -212,6 +212,19 @@ resource "azurerm_container_app" "this" {
         }
       }
 
+      # Where the dashboard records what somebody decided about a suggestion, beside
+      # the usage log and in the same writable layer. server/dashboard.py resolves this
+      # to the same path on its own, and it is set anyway for the reason above: reading
+      # the app in the portal should not mean inspecting a layer to learn where a file
+      # it writes ends up.
+      dynamic "env" {
+        for_each = var.dashboard_enabled ? [1] : []
+        content {
+          name  = "CONTEXT_CURATION"
+          value = "/app/logs/curation.json"
+        }
+      }
+
       dynamic "env" {
         for_each = var.audit_key_enabled ? [1] : []
         content {
@@ -302,8 +315,8 @@ resource "azurerm_container_app" "this" {
     }
 
     precondition {
-      condition     = !(var.dashboard_enabled && var.max_replicas != 1)
-      error_message = "dashboard_enabled needs max_replicas = 1. Each replica writes its own usage file, so above one the page shows whichever replica the load balancer happened to pick, and nothing on the page reveals that the numbers are partial. The Deploy workflow passes this alongside the switch; a local apply has to set it."
+      condition     = !(var.dashboard_enabled && (var.max_replicas != 1 || var.min_replicas != 1))
+      error_message = "dashboard_enabled needs exactly one replica, so both min_replicas and max_replicas have to be 1. Each replica writes its own usage file, so above one the page shows whichever replica the load balancer happened to pick; below one, the file goes with the replica every time the app scales to zero and the page starts its history again. Both are the same failure: numbers that are wrong with nothing on the page saying so. The Deploy workflow passes max_replicas alongside the switch and min_replicas already defaults to 1; a local apply has to set both."
     }
 
     precondition {
