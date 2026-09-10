@@ -188,7 +188,7 @@ variable "external_ingress_enabled" {
 }
 
 variable "allowed_client_cidrs" {
-  description = "CIDR ranges allowed to reach the app when external_ingress_enabled = true. Ignored while ingress stays internal. Container Apps' ip_security_restriction is deny-by-default the moment any Allow rule exists, so listing nothing here with external_ingress_enabled = true would deny everyone, not open everyone."
+  description = "CIDR ranges allowed to reach the app when external_ingress_enabled = true. Ignored while ingress stays internal. Container Apps' ip_security_restriction is deny-by-default the moment any Allow rule exists, but an empty list is not one Allow rule matching nobody: with no rules at all Container Apps applies no restriction, so listing nothing here with external_ingress_enabled = true opens the app to everyone rather than denying everyone. This description claimed the opposite until the dashboard shipped, which is worth saying plainly, because an operator who believed it would read an unset or emptied ALLOWED_CLIENT_CIDRS secret as a closed gate. It is an open one, and dashboard_enabled now carries a precondition refusing that pair."
   type = list(object({
     name        = string
     cidr        = string
@@ -206,9 +206,10 @@ variable "dashboard_enabled" {
     has no authentication of its own, its catalog panel lists every artifact id in the
     corpus regardless of grants, and /dashboard/purge rewrites the usage log, so the IP
     allow-list in allowed_client_cidrs is the entire gate. The preconditions on the
-    container app refuse it without external ingress, refuse it above one replica, and
-    refuse it outright once auth_mode = "entra"; the server carries its own copy of that
-    last one, so an out-of-band update cannot get around it either.
+    container app refuse it without external ingress, refuse it with an empty
+    allowed_client_cidrs, refuse it above one replica, and refuse it outright once
+    auth_mode = "entra"; the server carries its own copy of that last one, so an
+    out-of-band update cannot get around it either.
 
     Turning this on also sets CONTEXT_USAGE_LOG to a path, which switches the file sink
     back on alongside stderr. Log Analytics still receives every line, so the audit

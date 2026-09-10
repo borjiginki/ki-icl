@@ -159,8 +159,13 @@ jobs:
             dashboard=true
             replicas=(-var "max_replicas=1")
           fi
-          # Empty means no rule, which with external_ingress_enabled = true denies
-          # everyone rather than allowing everyone. See variables.tf.
+          # Empty means no rule at all, which with external_ingress_enabled = true
+          # lifts the IP restriction rather than closing it: Container Apps is
+          # deny-by-default only once an Allow rule exists. So an unset, emptied or
+          # rotated-away secret opens the app to everyone. See variables.tf. With the
+          # dashboard on that is an unauthenticated corpus index on the internet, which
+          # a precondition refuses, so the plan fails here rather than the apply
+          # succeeding.
           allowed_cidrs="${ALLOWED_CLIENT_CIDRS:-[]}"
           terraform init -backend-config=backend.hcl -input=false
           terraform plan -input=false -out=tfplan.binary \

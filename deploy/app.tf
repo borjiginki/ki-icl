@@ -95,6 +95,11 @@ resource "azurerm_container_app" "this" {
     # outside kiicl-vnet without a VPN gateway, meant for a short testing window
     # rather than as a permanent posture. Revisit once auth_mode = "entra" is real:
     # at that point the token requirement carries the weight this IP list carries now.
+    #
+    # An empty list is no rules at all rather than one rule matching nobody, so it
+    # lifts the restriction rather than closing it. That is what the allow-list
+    # precondition below refuses for the dashboard, and what var.allowed_client_cidrs
+    # now says.
     dynamic "ip_security_restriction" {
       for_each = var.external_ingress_enabled ? var.allowed_client_cidrs : []
       content {
@@ -289,6 +294,11 @@ resource "azurerm_container_app" "this" {
     precondition {
       condition     = !(var.dashboard_enabled && !var.external_ingress_enabled)
       error_message = "dashboard_enabled without external_ingress_enabled mounts a dashboard nobody can reach: the app's own ingress stays internal-only, and no VPN gateway, ExpressRoute or peering exists anywhere in this configuration."
+    }
+
+    precondition {
+      condition     = !(var.dashboard_enabled && length(var.allowed_client_cidrs) == 0)
+      error_message = "dashboard_enabled with an empty allowed_client_cidrs is an unauthenticated corpus index on the public internet. Container Apps applies no restriction at all when the rule list is empty: deny-by-default begins only once an Allow rule exists, so an empty list opens everyone rather than denying everyone. The list arrives from the ALLOWED_CLIENT_CIDRS secret, so this also fires when that secret is unset, emptied or rotated away while the dashboard stays on."
     }
 
     precondition {

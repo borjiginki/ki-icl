@@ -257,8 +257,8 @@ gh workflow run deploy.yml --ref main
 terraform output dashboard_url
 ```
 
-Demo scaffolding, and treated as such by three preconditions that fail the plan rather than warn.
-It needs `external_ingress_enabled` (otherwise nobody can reach it), it needs `max_replicas = 1` (each replica writes its own usage file, so above one the page shows a partial picture with nothing on it saying so, and the Deploy workflow passes the value alongside the switch), and it is refused outright with `auth_mode = "entra"`.
+Demo scaffolding, and treated as such by four preconditions that fail the plan rather than warn.
+It needs `external_ingress_enabled` (otherwise nobody can reach it), it needs a non-empty `allowed_client_cidrs` (an empty list is no IP rules at all, which opens the app to everyone rather than denying everyone, so the one gate this has would not exist), it needs `max_replicas = 1` (each replica writes its own usage file, so above one the page shows a partial picture with nothing on it saying so, and the Deploy workflow passes the value alongside the switch), and it is refused outright with `auth_mode = "entra"`.
 
 That last one is the important one.
 The dashboard has no authentication of its own, its catalog panel lists every artifact id in the corpus regardless of grants, and `/dashboard/purge` rewrites the usage log, so the IP allow-list is the entire gate.
