@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -15,7 +16,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.dashboard import aggregate, filter_records, read_records  # noqa: E402
+from server.dashboard import aggregate, filter_records, read_records  # noqa: E402
 
 
 def rec(**kw):
@@ -420,3 +421,86 @@ def test_the_dashboard_serves_a_live_catalog_when_run_as_a_script(tmp_path: Path
     finally:
         proc.terminate()
         proc.wait(timeout=5)
+
+
+def test_the_page_addresses_its_endpoints_relative_to_where_it_is_served():
+    """Served at / by scripts/dashboard.py and at /dashboard by the MCP server.
+
+    An absolute path works only for the first, and the failure mode is quiet: the page
+    renders its whole layout and then shows no data, because the fetch 404'd against a
+    route that does not exist under that prefix.
+    """
+    page = (Path(__file__).resolve().parent.parent / "server" / "dashboard.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'const BASE = location.pathname.replace(/\\/+$/, "");' in page
+    assert 'fetch(BASE + "/data?" + q)' in page
+    assert 'fetch(BASE + (state === "purge" ? "/purge" : "/curate")' in page
+    # Either quote style: the page is hand-written and the single-quoted form would
+    # break under the prefix exactly the same way, silently.
+    assert not re.search(r"""fetch\(['"]/""", page), (
+        "an absolute fetch cannot work under a path prefix"
+    )
+
+
+def test_an_unset_or_blank_usage_log_variable_lands_on_the_file_the_writer_uses():
+    """server/usage.py writes the log and server/dashboard.py reads it, so the two
+    resolving CONTEXT_USAGE_LOG differently is a page that renders in full over zero
+    records with nothing anywhere saying why.
+
+    Blank is the value that broke it: `Path("")` is `Path(".")`, which is not a file,
+    so `read_records` returned nothing forever. A trailing space did the same, and it
+    is invisible in the portal field the value is typed into.
+    """
+    from server import dashboard, usage
+
+    if os.environ.get("CONTEXT_USAGE_LOG"):
+        pytest.skip("CONTEXT_USAGE_LOG is set, so usage.USAGE_LOG_PATH is not its default")
+
+    # usage.py's default is relative to the working directory and this module's is
+    # anchored on the repository root, which is the same file wherever this actually
+    # runs. Joining it here pins the two defaults together without pinning the test to
+    # a working directory.
+    writer_default = dashboard.ROOT / usage.USAGE_LOG_PATH
+
+    assert dashboard.LOG == writer_default
+    for unset_or_blank in (None, "", "   "):
+        assert dashboard._usage_log_path(unset_or_blank) == writer_default
+    assert dashboard._usage_log_path(" /var/log/usage.jsonl ") == Path("/var/log/usage.jsonl")
+
+
+def test_the_loopback_host_answers_400_to_a_body_that_is_not_an_object():
+    """The two hosts must not disagree about which requests are a 400.
+
+    `[1, 2]` reached `.get` on a list here, which `except (ValueError, OSError)` does
+    not catch, so the caller got a dropped connection where the mounted host answered
+    400. Both hosts parse through `body_key_and_state` now.
+    """
+    import threading
+    import urllib.error
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+
+    from scripts.dashboard import Handler
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with pytest.raises(urllib.error.HTTPError) as refused:
+            urllib.request.urlopen(
+                urllib.request.Request(
+                    f"http://127.0.0.1:{server.server_port}/curate",
+                    data=b"[1, 2]",
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                ),
+                timeout=5,
+            )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert refused.value.code == 400

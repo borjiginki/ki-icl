@@ -211,6 +211,11 @@
 </dialog>
 
 <script>
+/* Every request below is relative to wherever this page is served from: `/` under
+   scripts/dashboard.py, `/dashboard` under the MCP server's own ingress. Absolute
+   paths worked only for the first of those, and the second failure is silent. */
+const BASE = location.pathname.replace(/\/+$/, "");
+
 const $ = id => document.getElementById(id);
 const tip = $("tip");
 let DATA = null, live = true;
@@ -383,7 +388,7 @@ function misses(rows, curatedRows) {
       b.disabled = true;
       /* Two endpoints, because the consequences differ: /curate writes a mark you can
          undo, /purge edits the log itself and cannot be undone. */
-      await fetch(state === "purge" ? "/purge" : "/curate", {
+      await fetch(BASE + (state === "purge" ? "/purge" : "/curate"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key: b.dataset.key, state }),
@@ -583,7 +588,7 @@ async function load() {
   if (hours) q.set("hours", hours);
   if (domain) q.set("domain", domain);
   try {
-    render(await (await fetch("/data?" + q)).json());
+    render(await (await fetch(BASE + "/data?" + q)).json());
   } catch (e) {
     $("meta").textContent = "Could not read the log: " + e.message;
   }

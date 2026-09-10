@@ -13,6 +13,15 @@ output "mcp_url" {
   value       = "https://${azurerm_container_app.this.ingress[0].fqdn}/mcp"
 }
 
+output "dashboard_url" {
+  description = "The usage dashboard, when dashboard_enabled = true. Same ingress and allow-list as mcp_url, and no authentication of its own: it lists the whole corpus index regardless of grants, and /dashboard/purge rewrites the usage log."
+  # null rather than a sentence saying it is off. `terraform output -raw dashboard_url`
+  # prints the value into whatever consumes it, so a sentence there is something that
+  # gets treated as a URL and is not one; null is the same statement with nothing
+  # pretending to be a value.
+  value = var.dashboard_enabled ? "https://${azurerm_container_app.this.ingress[0].fqdn}/dashboard" : null
+}
+
 output "key_vault_name" {
   description = "Where to set the audit key. See the `audit key` section of deploy/README.md."
   value       = azurerm_key_vault.this.name

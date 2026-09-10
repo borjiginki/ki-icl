@@ -442,3 +442,65 @@ def test_a_loopback_run_is_not_shouted_at(monkeypatch):
     )
 
     assert "UNAUTHENTICATED" not in " ".join(lines)
+
+
+def test_the_dashboard_is_refused_in_entra_mode(served, monkeypatch):
+    """It has no authentication of its own and its catalog panel lists every artifact
+    id regardless of grants, so an IP allow-list stops being a defensible gate the
+    moment there are real identities to gate. Terraform refuses this too; this is the
+    copy that survives an `az containerapp update`."""
+    from server import mcp_server
+
+    monkeypatch.setenv("KI_ICL_AUTH", "entra")
+    monkeypatch.setenv("KI_ICL_DASHBOARD", "1")
+
+    with pytest.raises(SystemExit, match="KI_ICL_DASHBOARD"):
+        mcp_server.refuse_unsafe_start(http=True, host="127.0.0.1")
+
+
+def test_the_dashboard_is_allowed_alongside_unauthenticated_serving(served, monkeypatch):
+    """`off` is the disclosed posture the demo runs in. The guard is about entra, not
+    about the dashboard being unwelcome."""
+    from server import mcp_server
+
+    monkeypatch.setenv("KI_ICL_AUTH", "off")
+    monkeypatch.setenv("KI_ICL_DASHBOARD", "1")
+
+    mcp_server.refuse_unsafe_start(http=True, host="0.0.0.0")
+
+
+def test_a_dashboard_on_a_wide_bind_is_announced_loudly(monkeypatch):
+    """Off loopback the dashboard is reachable by whatever can reach the port, and it
+    answers with the whole corpus index and a route that rewrites the usage log. The
+    operator has to be told at boot, because nothing in the page says it and the
+    process cannot tell whether an ingress is in front of it."""
+    from server import access, dashboard, mcp_server
+
+    monkeypatch.setenv("KI_ICL_AUTH", "off")
+    monkeypatch.setenv("KI_ICL_DASHBOARD", "1")
+
+    lines = mcp_server.startup_lines(
+        host="0.0.0.0", port=8000, http=True, mode=access.Mode.OBSERVE
+    )
+    text = " ".join(lines)
+
+    assert "/dashboard" in text
+    assert "purge" in text
+    # The loopback host prints the log path as it starts; this host has no other line
+    # saying where its numbers come from, and reading the wrong file is the failure
+    # that looks like a working page with nothing on it.
+    assert str(dashboard.LOG) in text
+
+
+def test_no_dashboard_warning_when_it_is_not_mounted(monkeypatch):
+    """A warning that fires when it does not apply becomes noise and stops being read."""
+    from server import access, mcp_server
+
+    monkeypatch.setenv("KI_ICL_AUTH", "off")
+    monkeypatch.delenv("KI_ICL_DASHBOARD", raising=False)
+
+    lines = mcp_server.startup_lines(
+        host="0.0.0.0", port=8000, http=True, mode=access.Mode.OBSERVE
+    )
+
+    assert "/dashboard" not in " ".join(lines)

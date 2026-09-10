@@ -95,6 +95,11 @@ resource "azurerm_container_app" "this" {
     # outside kiicl-vnet without a VPN gateway, meant for a short testing window
     # rather than as a permanent posture. Revisit once auth_mode = "entra" is real:
     # at that point the token requirement carries the weight this IP list carries now.
+    #
+    # An empty list is no rules at all rather than one rule matching nobody, so it
+    # lifts the restriction rather than closing it. That is what the allow-list
+    # precondition below refuses for the dashboard, and what var.allowed_client_cidrs
+    # now says.
     dynamic "ip_security_restriction" {
       for_each = var.external_ingress_enabled ? var.allowed_client_cidrs : []
       content {
@@ -187,10 +192,37 @@ resource "azurerm_container_app" "this" {
       }
 
       # Empty: stderr is the only sink, and Container Apps forwards it to the workspace
-      # whose retention is the retention policy.
+      # whose retention is the retention policy. The dashboard is the one exception, and
+      # it is not a second store in the sense that matters: Log Analytics still receives
+      # every line, and this file lives in the container's own writable layer, dies with
+      # the revision, and is read by nothing but /dashboard.
       env {
         name  = "CONTEXT_USAGE_LOG"
-        value = ""
+        value = var.dashboard_enabled ? "/app/logs/usage.jsonl" : ""
+      }
+
+      # /app is chown'd to the app user in the image, and the read-only corpus mount is
+      # at /app/context, so /app/logs is writable by uid 10001. server/usage.py creates
+      # it on first write.
+      dynamic "env" {
+        for_each = var.dashboard_enabled ? [1] : []
+        content {
+          name  = "KI_ICL_DASHBOARD"
+          value = "1"
+        }
+      }
+
+      # Where the dashboard records what somebody decided about a suggestion, beside
+      # the usage log and in the same writable layer. server/dashboard.py resolves this
+      # to the same path on its own, and it is set anyway for the reason above: reading
+      # the app in the portal should not mean inspecting a layer to learn where a file
+      # it writes ends up.
+      dynamic "env" {
+        for_each = var.dashboard_enabled ? [1] : []
+        content {
+          name  = "CONTEXT_CURATION"
+          value = "/app/logs/curation.json"
+        }
       }
 
       dynamic "env" {
@@ -270,6 +302,26 @@ resource "azurerm_container_app" "this" {
     precondition {
       condition     = !(local.serving_ki_icl && !var.create_role_assignments && !var.acr_pull_confirmed)
       error_message = "Pulling from the registry needs the managed identity to hold AcrPull. Either let this configuration create it (create_role_assignments = true), or confirm the grant yourself against the real principal id and set acr_pull_confirmed = true."
+    }
+
+    precondition {
+      condition     = !(var.dashboard_enabled && !var.external_ingress_enabled)
+      error_message = "dashboard_enabled without external_ingress_enabled mounts a dashboard nobody can reach: the app's own ingress stays internal-only, and no VPN gateway, ExpressRoute or peering exists anywhere in this configuration."
+    }
+
+    precondition {
+      condition     = !(var.dashboard_enabled && length(var.allowed_client_cidrs) == 0)
+      error_message = "dashboard_enabled with an empty allowed_client_cidrs is an unauthenticated corpus index on the public internet. Container Apps applies no restriction at all when the rule list is empty: deny-by-default begins only once an Allow rule exists, so an empty list opens everyone rather than denying everyone. The list arrives from the ALLOWED_CLIENT_CIDRS secret, so this also fires when that secret is unset, emptied or rotated away while the dashboard stays on."
+    }
+
+    precondition {
+      condition     = !(var.dashboard_enabled && (var.max_replicas != 1 || var.min_replicas != 1))
+      error_message = "dashboard_enabled needs exactly one replica, so both min_replicas and max_replicas have to be 1. Each replica writes its own usage file, so above one the page shows whichever replica the load balancer happened to pick; below one, the file goes with the replica every time the app scales to zero and the page starts its history again. Both are the same failure: numbers that are wrong with nothing on the page saying so. The Deploy workflow passes max_replicas alongside the switch and min_replicas already defaults to 1; a local apply has to set both."
+    }
+
+    precondition {
+      condition     = !(var.dashboard_enabled && var.auth_mode == "entra")
+      error_message = "dashboard_enabled and auth_mode = \"entra\" are mutually exclusive. The dashboard has no authentication of its own and lists every artifact id regardless of grants, so an IP allow-list stops being a defensible gate the moment there are real identities to gate. The server refuses this combination at startup too."
     }
   }
 

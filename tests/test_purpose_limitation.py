@@ -22,7 +22,11 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-AGGREGATORS = ("scripts/dashboard.py", "scripts/usage_report.py")
+# server/dashboard.py is here because the aggregation moved there so the image could
+# import it. A file list is a fragile control exactly when code moves, and moving
+# aggregation out from under this tuple would retire the control while still showing
+# green. See docs/superpowers/specs/2026-09-10-dashboard-on-the-server-ingress-design.md.
+AGGREGATORS = ("scripts/dashboard.py", "scripts/usage_report.py", "server/dashboard.py")
 
 
 @pytest.mark.parametrize("script", AGGREGATORS)

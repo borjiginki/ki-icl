@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.dashboard import (  # noqa: E402
+from server.dashboard import (  # noqa: E402
     aggregate,
     curate,
     purge,

@@ -12,8 +12,9 @@ registered on the shared `mcp` instance beside the skills tools. Only the import
 **The server is built by a factory rather than at import time**, because FastMCP takes
 `auth=` only in the constructor. Without `build_server()` there would be no way to
 exercise more than one auth configuration in one process, and the HTTP auth tests could
-not exist. `mcp` is still bound at module level, because `tests/test_gaps.py` and
-`scripts/dashboard.py` import that name.
+not exist. `mcp` is still bound at module level, because `scripts/demo.py` and four of
+the test modules import that name. `scripts/dashboard.py` does not: it is a host for
+`server/dashboard.py` and imports nothing from here.
 
 ## Authentication is HTTP-only, and that is honest rather than a gap
 
@@ -61,6 +62,10 @@ from fastmcp.server.auth import AuthProvider  # noqa: E402
 from server import access  # noqa: E402
 from server import artifacts  # noqa: E402
 from server import identity  # noqa: E402
+# The module rather than `from ... import register`, for the same reason as usage
+# below: startup_lines prints dashboard.LOG, and a path imported by value here would
+# not follow the one the dashboard actually reads.
+from server import dashboard as usage_dashboard  # noqa: E402
 
 # The module, not `from ... import USAGE_LOG`: importing the sink by value creates a
 # second binding that silently diverges from the one the middleware writes through.
@@ -125,12 +130,17 @@ def reader() -> dict[str, Any]:
     }
 
 
-def build_server(auth: AuthProvider | None = None) -> FastMCP:
+def build_server(auth: AuthProvider | None = None, dashboard: bool = False) -> FastMCP:
     """One configured server. The only place the tools are registered.
 
     `mask_error_details=True` is not tidiness: FastMCP returns exception text to the
     client verbatim by default, so a traceback naming an artifact id would disclose
     exactly what authorization exists to withhold.
+
+    `dashboard` mounts the usage dashboard at /dashboard, on this same app and port.
+    A parameter rather than an environment read, for the same reason `auth` is one:
+    this function reads no environment, the composition root decides, and a test can
+    mount the routes without touching `os.environ`.
     """
     mcp = FastMCP(name="ki-icl", instructions=INSTRUCTIONS, auth=auth, mask_error_details=True)
     mcp.add_middleware(ContextUsageMiddleware())
@@ -234,6 +244,9 @@ def build_server(auth: AuthProvider | None = None) -> FastMCP:
             indent=2,
         )
 
+    if dashboard:
+        usage_dashboard.register(mcp)
+
     return mcp
 
 
@@ -250,6 +263,17 @@ _TENANT_PATTERN = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-
 def auth_mode() -> str:
     """`entra`, `demo`, `off`, or "" when unset. Never guessed into something safer."""
     return os.environ.get("KI_ICL_AUTH", "").strip().lower()
+
+
+def dashboard_from_env() -> bool:
+    """Whether to mount the usage dashboard. Off unless explicitly switched on.
+
+    Exactly "1", like KI_ICL_AUDIT_REQUIRED, rather than any truthy-looking string.
+    This one decides whether an unauthenticated view of the whole corpus index is
+    reachable, so "true", "yes" and "0 " should all fail closed rather than be guessed
+    at.
+    """
+    return os.environ.get("KI_ICL_DASHBOARD", "").strip() == "1"
 
 
 def _demo_auth() -> AuthProvider:
@@ -349,6 +373,14 @@ def refuse_unsafe_start(*, http: bool, host: str) -> None:
         )
     if mode == "entra" and os.environ.get("KI_ICL_DEV_PRINCIPAL", "").strip():
         raise SystemExit("KI_ICL_DEV_PRINCIPAL is refused in entra mode.")
+    if mode == "entra" and dashboard_from_env():
+        raise SystemExit(
+            "KI_ICL_DASHBOARD is refused in entra mode. The dashboard has no "
+            "authentication of its own, and its catalog panel lists every artifact id "
+            "in the corpus regardless of grants, so it must not be reachable once "
+            "there are real identities to gate. deploy/variables.tf refuses the same "
+            "combination; this is the copy that survives an out-of-band update."
+        )
     if mode == "demo" and http and host not in ("127.0.0.1", "::1", "localhost"):
         raise SystemExit(f"demo tokens are loopback-only; refusing to bind {host}.")
     # A policy that does not load becomes deny-all at runtime, which is the right
@@ -411,6 +443,15 @@ def startup_lines(*, host: str, port: int, http: bool, mode: access.Mode) -> lis
             f"reach this port reads the whole corpus. Only the surrounding network is "
             f"stopping them, and this process cannot tell whether there is one."
         )
+    if http and dashboard_from_env() and host not in LOOPBACK:
+        lines.append(
+            f"WARNING: the usage dashboard is mounted at http://{host}:{port}/dashboard, "
+            f"reading {usage_dashboard.LOG}. "
+            f"It lists every artifact id in the corpus regardless of grants, and "
+            f"/dashboard/purge rewrites the usage log. It has no authentication of its "
+            f"own; only the surrounding network is stopping anyone who can reach this "
+            f"port."
+        )
     if identity.audit_key_from_env() is None:
         lines.append(
             "NOTE: no usable KI_ICL_AUDIT_KEY, so no actor is recorded. The log will "
@@ -419,7 +460,7 @@ def startup_lines(*, host: str, port: int, http: bool, mode: access.Mode) -> lis
     return lines
 
 
-mcp = build_server(auth=auth_from_env())
+mcp = build_server(auth=auth_from_env(), dashboard=dashboard_from_env())
 
 
 if __name__ == "__main__":

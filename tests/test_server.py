@@ -145,9 +145,14 @@ def _static_auth():
     return StaticTokenVerifier(tokens={"demo-token-x": {"client_id": "c", "scopes": []}})
 
 
-def test_the_module_level_server_is_still_the_one_the_tests_and_dashboard_import():
-    """The refactor must not move the name: tests/test_gaps.py and scripts/dashboard.py
-    both import `server.mcp_server.mcp`."""
+def test_the_module_level_server_is_still_the_one_everything_else_imports():
+    """The refactor must not move the name. `scripts/demo.py` imports
+    `server.mcp_server.mcp`, and so do four test modules including this one, so
+    building the server in a factory had to leave the module-level binding in place.
+
+    Not scripts/dashboard.py, which an earlier version of this docstring claimed: that
+    is a host for server/dashboard.py and imports nothing from this module.
+    """
     from server import mcp_server
 
     assert mcp_server.mcp.name == "ki-icl"
