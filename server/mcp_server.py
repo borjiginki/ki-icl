@@ -82,17 +82,26 @@ INSTRUCTIONS = (
     "`get_domain_manifest(domain)` to choose, then `get_artifact(domain, ids)`. "
     "Use these when the user asks what KI group does, offers, or requires, and "
     "also for the current state of its work: the `projects` domain holds one "
-    "artifact per live engagement. A `not_found` means no artifact has that id: "
-    "say so, and never substitute a similar one.\n\n"
+    "artifact per engagement, live or delivered. A `not_found` means no artifact "
+    "has that id: say so, and never substitute a similar one.\n\n"
+    "A large domain is FACETED, and reading it flat is the expensive mistake this "
+    "layer exists to prevent. When `get_domain_manifest(domain)` answers with a "
+    "`facets` index instead of artifact rows, it is telling you to narrow first: "
+    "pick the axes that match the question and call again with "
+    "`get_domain_manifest(domain, group=[\"sector:aviation\"])`. Filters are ANDed, "
+    "so two of them are much cheaper than listing a whole group, and `projects` "
+    "answers most questions in a few hundred tokens that way. Never ask for a "
+    "group you did not read in the index.\n\n"
     "Call `list_domains` for the question in front of you rather than trusting a "
     "listing from earlier in the conversation. The corpus is edited while you are "
     "talking, so a domain that held nothing an hour ago may hold the answer now, "
     "and reporting it as empty from memory is a wrong answer with no miss "
     "recorded anywhere.\n\n"
     "A manifest row may carry a `progress` object with `stage`, `health` and "
-    "`as_of`. A question about several artifacts at once is answered from the "
-    "manifest alone, with no fetch. Always state the `as_of` date in such an "
-    "answer: `version_id` is opaque and cannot tell you how old an assessment "
+    "`as_of`. A question about several artifacts at once is answered from those "
+    "rows alone, with no fetch: in `projects`, ask for "
+    "`group=[\"lifecycle:ongoing\"]` and read the rows. Always state the `as_of` "
+    "date in such an answer: `version_id` is opaque and cannot tell you how old an assessment "
     "is, so that date is the only recency signal there is.\n\n"
     "Every row carries `review`. When it is not `approved`, say so in the answer "
     "and say which: `demo` means the content is invented and exists only to "
@@ -157,12 +166,28 @@ def build_server(auth: AuthProvider | None = None, dashboard: bool = False) -> F
         return json.dumps(artifacts.list_domains_payload(**reader()), indent=2)
 
     @mcp.tool
-    def get_domain_manifest(domain: str) -> str:
-        """List one domain's artifacts with descriptions, so you can choose what to fetch.
+    def get_domain_manifest(domain: str, group: str | list[str] | None = None) -> str:
+        """List one domain's artifacts, or its facets, so you can choose what to fetch.
 
-        Returns no file bodies. Read each `description` as a "when to use" signal, then
-        fetch the ones you need with `get_artifact`. An unknown domain returns
-        `status: not_found` along with the domains that do exist.
+        Returns no file bodies. Two shapes, and the payload tells you which you got.
+
+        A **faceted** domain answers a call with no `group` with a `facets` index: each
+        axis, and each of its values with a count. No artifact rows. Read it, pick the
+        filters that match the question, and call again with `group`. This exists
+        because listing a large domain flat costs tens of thousands of tokens, and the
+        index costs hundreds.
+
+        A `group` is `"<facet>:<value>"`, exactly as the index spells it. Pass a LIST to
+        narrow further: `["sector:automotive", "capability:agentic-ai"]` returns only
+        artifacts carrying both, which is far cheaper than one broad filter. Prefer two
+        filters over reading a whole group.
+
+        A domain with no `facets` in its payload has no axes and lists every artifact in
+        one call; `group` is not valid there.
+
+        An unknown domain returns `status: not_found` along with the domains that do
+        exist. An unknown or malformed filter also returns `not_found`, with the real
+        facets and values, so one more call recovers.
 
         `status: forbidden` is different and means the domain exists but this user may
         not read it. Tell the user they do not have access. Do NOT call `report_gap`
@@ -171,8 +196,11 @@ def build_server(auth: AuthProvider | None = None, dashboard: bool = False) -> F
 
         Args:
             domain: Domain id, exactly as `list_domains` reported it.
+            group: One `"<facet>:<value>"` filter, or a list of them, ANDed. Omit it to
+                read a faceted domain's index.
         """
-        return json.dumps(artifacts.domain_manifest_payload(domain, **reader()), indent=2)
+        payload = artifacts.domain_manifest_payload(domain, group=group, **reader())
+        return json.dumps(payload, indent=2)
 
     @mcp.tool
     def get_artifact(domain: str, ids: str | list[str], max_file_bytes: int = 1_048_576) -> str:

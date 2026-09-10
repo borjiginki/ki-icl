@@ -51,6 +51,36 @@ async def test_get_artifact_accepts_a_list_of_ids_over_the_wire(monkeypatch, cat
     assert [a["status"] for a in fetched["artifacts"]] == ["found", "not_found"]
 
 
+async def test_get_domain_manifest_passes_a_group_filter_through(monkeypatch, catalog: Path):
+    """The tool must accept `group`, or the two-stage path is unreachable over MCP."""
+    from server import artifacts
+    from server.mcp_server import mcp
+
+    monkeypatch.setattr(artifacts, "ARTIFACTS_ROOT", catalog)
+
+    tools = {t.name: t for t in await mcp.list_tools()}
+    assert "group" in tools["get_domain_manifest"].parameters["properties"]
+
+    # company/ declares no facets, so a filter there is an honest not_found rather
+    # than a silent full listing.
+    payload = await _call(
+        mcp, "get_domain_manifest", {"domain": "company", "group": "sector:automotive"}
+    )
+
+    assert payload["status"] == "not_found"
+
+
+async def test_the_instructions_tell_an_agent_to_narrow_a_faceted_domain_first():
+    """An agent that does not know about the index reads every row of a large domain,
+    which is the expense the two-stage manifest exists to remove."""
+    from server.mcp_server import mcp
+
+    instructions = mcp.instructions or ""
+
+    assert "facets" in instructions
+    assert "group=" in instructions
+
+
 async def test_the_instructions_tell_an_agent_to_report_a_gap():
     """Without this the tool exists and is never called: an agent that finds nothing
     has no reason to think anyone wants to know."""
