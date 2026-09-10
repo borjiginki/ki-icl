@@ -597,3 +597,36 @@ def test_a_loopback_run_is_not_shouted_at(monkeypatch):
     )
 
     assert "UNAUTHENTICATED" not in " ".join(lines)
+
+
+async def test_health_is_unauthenticated(auth_app, raw_http, monkeypatch):
+    monkeypatch.setenv("AZURE_TENANT_ID", "cbd1a264-94b1-4d60-b0f6-ca149e7aef80")
+    monkeypatch.setenv("AZURE_CLIENT_ID", "11111111-1111-1111-1111-111111111111")
+    monkeypatch.setenv("MCP_BASE_URL", "https://icl.example")
+    app = auth_app("entra")
+    async with raw_http(app) as client:
+        response = await client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+def test_entra_startup_names_nonsecret_config(monkeypatch):
+    from server import access, entra_auth, mcp_server
+
+    monkeypatch.setenv("KI_ICL_AUTH", "entra")
+    monkeypatch.setenv("AZURE_TENANT_ID", "cbd1a264-94b1-4d60-b0f6-ca149e7aef80")
+    monkeypatch.setenv("AZURE_CLIENT_ID", "11111111-1111-1111-1111-111111111111")
+    monkeypatch.setenv("MCP_BASE_URL", "https://icl.example")
+    auth = mcp_server.auth_from_env()
+    lines = mcp_server.startup_lines(
+        host="127.0.0.1",
+        port=8000,
+        http=True,
+        mode=access.Mode.ENFORCE,
+        auth=auth,
+    )
+    text = " ".join(lines)
+    assert "cbd1a264-94b1-4d60-b0f6-ca149e7aef80" in text
+    assert "11111111-1111-1111-1111-111111111111" in text
+    assert "https://icl.example" in text
+    assert "secret" not in text.lower()

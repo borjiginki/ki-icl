@@ -56,6 +56,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastmcp import FastMCP  # noqa: E402
 from fastmcp.server.auth import AuthProvider  # noqa: E402
+from starlette.requests import Request  # noqa: E402
+from starlette.responses import JSONResponse  # noqa: E402
 
 from server import access  # noqa: E402
 from server import artifacts  # noqa: E402
@@ -234,6 +236,10 @@ def build_server(auth: AuthProvider | None = None) -> FastMCP:
             indent=2,
         )
 
+    @mcp.custom_route("/health", methods=["GET"])
+    async def _health(_: Request) -> JSONResponse:
+        return JSONResponse({"status": "ok"})
+
     if isinstance(auth, entra_auth.EntraAuthProvider):
         entra_auth.register_oauth_routes(mcp, auth.entra_config)
 
@@ -355,7 +361,14 @@ def bind_address() -> tuple[str, int]:
     return host, port
 
 
-def startup_lines(*, host: str, port: int, http: bool, mode: access.Mode) -> list[str]:
+def startup_lines(
+    *,
+    host: str,
+    port: int,
+    http: bool,
+    mode: access.Mode,
+    auth: AuthProvider | None = None,
+) -> list[str]:
     """What the operator sees on stderr at boot.
 
     A function rather than inline prints so the warnings can be tested. Each warning is
@@ -383,6 +396,12 @@ def startup_lines(*, host: str, port: int, http: bool, mode: access.Mode) -> lis
             "NOTE: no usable KI_ICL_AUDIT_KEY, so no actor is recorded. The log will "
             "say what was read, never by whom."
         )
+    if isinstance(auth, entra_auth.EntraAuthProvider):
+        config = auth.entra_config
+        lines.append(
+            f"entra tenant={config.tenant_id} client={config.client_id} "
+            f"base_url={config.base_url}"
+        )
     return lines
 
 
@@ -395,7 +414,9 @@ if __name__ == "__main__":
     refuse_unsafe_start(http=http, host=host)
 
     mode = identity.effective_mode()
-    for line in startup_lines(host=host, port=port, http=http, mode=mode):
+    for line in startup_lines(
+        host=host, port=port, http=http, mode=mode, auth=mcp.auth
+    ):
         print(line, file=sys.stderr)
 
     usage.USAGE_LOG.write(

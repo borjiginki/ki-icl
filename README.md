@@ -392,8 +392,11 @@ The failure mode it does fix is specific and real: an agent doing broad discover
 Over stdio the client spawns the process, owns its stdin, and runs it as the invoking user, so a bearer token would prove nothing that OS process ownership does not already decide.
 `KI_ICL_AUTH` selects `entra`, `demo` or `off`, and `--http` refuses to start without one of them, so a forgotten variable is a server that does not come up rather than one that serves HR content to anyone who can reach the port.
 
-The server is a pure OAuth **resource server**: `RemoteAuthProvider` over `JWTVerifier`, holding a public JWKS URL and no secret of any kind.
-Claude authenticates against Entra; this server only ever verifies the result.
+Entra HTTP mode is an OAuth resource server plus this host as the authorization-server facade.
+`RemoteAuthProvider` still verifies Entra-issued JWTs against a public JWKS URL and holds no secret of any kind.
+Canonical settings are `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and `MCP_BASE_URL`.
+Legacy `KI_ICL_ENTRA_*` names still work.
+`KI_ICL_AUTH` remains the mode switch.
 
 `config/demo_principals.yaml` holds fake principals for local testing, gated on `environment: local`, a `demo-token-` prefix on every token, `KI_ICL_AUTH=demo`, and a loopback bind.
 Because `StaticTokenVerifier` passes its claims through unchanged, the demo tokens exercise the same `claims -> Principal` code as a real Entra token rather than a mock.

@@ -246,6 +246,32 @@ resource "azurerm_container_app" "this" {
           value = "https://${var.name_prefix}-context.${azurerm_container_app_environment.this.default_domain}"
         }
       }
+
+      # Canonical aliases of the same tenant, client, and public origin.
+      # The server prefers these names and still accepts the KI_ICL_ENTRA_* ones.
+      dynamic "env" {
+        for_each = var.auth_mode == "entra" ? [1] : []
+        content {
+          name  = "AZURE_TENANT_ID"
+          value = var.entra.tenant_id
+        }
+      }
+
+      dynamic "env" {
+        for_each = var.auth_mode == "entra" ? [1] : []
+        content {
+          name  = "AZURE_CLIENT_ID"
+          value = var.entra.client_id
+        }
+      }
+
+      dynamic "env" {
+        for_each = var.auth_mode == "entra" ? [1] : []
+        content {
+          name  = "MCP_BASE_URL"
+          value = "https://${var.name_prefix}-context.${azurerm_container_app_environment.this.default_domain}"
+        }
+      }
     }
   }
 
