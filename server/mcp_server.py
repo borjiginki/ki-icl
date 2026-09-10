@@ -61,7 +61,10 @@ from fastmcp.server.auth import AuthProvider  # noqa: E402
 from server import access  # noqa: E402
 from server import artifacts  # noqa: E402
 from server import identity  # noqa: E402
-from server.dashboard import register as register_dashboard  # noqa: E402
+# The module rather than `from ... import register`, for the same reason as usage
+# below: startup_lines prints dashboard.LOG, and a path imported by value here would
+# not follow the one the dashboard actually reads.
+from server import dashboard as usage_dashboard  # noqa: E402
 
 # The module, not `from ... import USAGE_LOG`: importing the sink by value creates a
 # second binding that silently diverges from the one the middleware writes through.
@@ -241,7 +244,7 @@ def build_server(auth: AuthProvider | None = None, dashboard: bool = False) -> F
         )
 
     if dashboard:
-        register_dashboard(mcp)
+        usage_dashboard.register(mcp)
 
     return mcp
 
@@ -441,7 +444,8 @@ def startup_lines(*, host: str, port: int, http: bool, mode: access.Mode) -> lis
         )
     if http and dashboard_from_env() and host not in LOOPBACK:
         lines.append(
-            f"WARNING: the usage dashboard is mounted at http://{host}:{port}/dashboard. "
+            f"WARNING: the usage dashboard is mounted at http://{host}:{port}/dashboard, "
+            f"reading {usage_dashboard.LOG}. "
             f"It lists every artifact id in the corpus regardless of grants, and "
             f"/dashboard/purge rewrites the usage log. It has no authentication of its "
             f"own; only the surrounding network is stopping anyone who can reach this "

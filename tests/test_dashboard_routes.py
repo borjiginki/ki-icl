@@ -105,6 +105,9 @@ def test_curate_marks_a_suggestion(log, tmp_path):
         )
 
     assert response.status_code == 200
+    # Every other answer from either host says this, and a POST response that a shared
+    # cache stored would show a mark that is no longer there.
+    assert response.headers["cache-control"] == "no-store"
     entry = json.loads((tmp_path / "curation.json").read_text(encoding="utf-8"))["entries"][0]
     assert entry["key"] == "method/nope"
     assert entry["state"] == "dismissed"
@@ -134,6 +137,7 @@ def test_purge_removes_the_records_that_produced_the_suggestion(log):
         response = client.post("/dashboard/purge", json={"key": "method/nope"})
 
     assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
     assert response.json() == {"key": "method/nope", "removed": 1}
     remaining = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
     assert [r["event"] for r in remaining] == ["purge"]

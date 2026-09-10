@@ -31,6 +31,7 @@ from server.dashboard import (  # noqa: E402
     LOG,
     PAGE,
     aggregate,
+    body_key_and_state,
     curate,
     demand_baseline,
     filter_records,
@@ -77,12 +78,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            body = json.loads(self.rfile.read(length) or b"{}")
-            key = str(body.get("key", ""))
-            state = str(body.get("state", ""))
+            raw = self.rfile.read(length)
         except (ValueError, OSError):
             self.send_error(400)
             return
+        # Parsed by the shared function rather than here, so that a body the mounted
+        # host answers 400 for cannot be a traceback on this one.
+        parsed = body_key_and_state(raw)
+        if parsed is None:
+            self.send_error(400)
+            return
+        key, state = parsed
         if not key:
             self.send_error(400)
             return

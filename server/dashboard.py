@@ -24,7 +24,33 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
-LOG = Path(os.environ.get("CONTEXT_USAGE_LOG", ROOT / "logs" / "usage.jsonl"))
+
+
+def _usage_log_path(raw: str | None) -> Path:
+    """Where the usage log is, resolved the way `server/usage.py` resolves it.
+
+    That module is the writer and this one is the reader, so the two have to agree on
+    the file or the page renders in full over zero records with nothing anywhere saying
+    why. Two rules have to match: `.strip()`, because the value is typed into a portal
+    field where a trailing space is invisible, and the default, because an unset
+    variable has to land on the file the writer picks.
+
+    Empty is the one value the two cannot read alike. To the writer it means "no file
+    sink at all", and a reader has nothing to do with that, so here it means the default
+    instead. That is what production sets when the dashboard is off, and it leaves this
+    pointing at a file nobody writes, which is the truthful answer; it used to resolve
+    to `Path(".")`, which is not a file either but reads as a bug rather than as an
+    empty log.
+
+    The default is anchored on the repository root while the writer's is relative to
+    the working directory. They are the same file in every way this is run: /app is
+    both in the container, and the Makefile targets run from the repository root.
+    """
+    value = (raw or "").strip()
+    return Path(value) if value else ROOT / "logs" / "usage.jsonl"
+
+
+LOG = _usage_log_path(os.environ.get("CONTEXT_USAGE_LOG"))
 PAGE = ROOT / "server" / "dashboard.html"
 
 
@@ -587,6 +613,24 @@ def live_catalog() -> dict[str, Any] | None:
     return record if record["artifact_count"] else None
 
 
+def body_key_and_state(raw: bytes) -> tuple[str, str] | None:
+    """`(key, state)` from a POST body, or None for a body neither host can act on.
+
+    At module scope because both hosts parse a body the same way and must answer the
+    same request the same way. The second rejection is the one that needs saying: a
+    body whose top level is not an object was an uncaught AttributeError on the loopback
+    host, because `[1, 2].get` is not something `except (ValueError, OSError)` catches,
+    and the caller saw a dropped connection where the mounted host answers 400.
+    """
+    try:
+        body = json.loads(raw or b"{}")
+    except ValueError:
+        return None
+    if not isinstance(body, dict):
+        return None
+    return str(body.get("key", "")), str(body.get("state", ""))
+
+
 def register(mcp: Any) -> None:
     """Mount the dashboard on an existing FastMCP server, at /dashboard.
 
@@ -600,18 +644,19 @@ def register(mcp: Any) -> None:
     Starlette is imported here rather than at module scope so `scripts/dashboard.py`,
     which needs none of it, keeps its stdlib-only import list.
     """
+    from starlette.concurrency import run_in_threadpool
     from starlette.requests import Request
     from starlette.responses import HTMLResponse, JSONResponse, Response
 
-    def _body_key_and_state(raw: bytes) -> tuple[str, str] | None:
-        """`(key, state)` from a request body, or None for anything unparseable."""
-        try:
-            body = json.loads(raw or b"{}")
-        except ValueError:
-            return None
-        if not isinstance(body, dict):
-            return None
-        return str(body.get("key", "")), str(body.get("state", ""))
+    # Every handler below hands its file work to a thread, because unlike on the
+    # loopback host these share one event loop with /mcp and none of that work is
+    # bounded: the usage log has no rotation and grows for the life of the replica,
+    # live_catalog stats the whole corpus tree, purge rewrites the log, and the page
+    # re-polls all of it every three seconds. On a thread that costs the page; on the
+    # loop it would be paid in /mcp latency by callers who never opened the dashboard.
+    # The page route is left alone, being one read of a static file. All four stay
+    # `async def` regardless, because the two POST routes have to await the request
+    # body before there is anything to hand over.
 
     @mcp.custom_route("/dashboard", methods=["GET"], include_in_schema=False)
     async def page(request: Request) -> Response:
@@ -619,34 +664,48 @@ def register(mcp: Any) -> None:
 
     @mcp.custom_route("/dashboard/data", methods=["GET"], include_in_schema=False)
     async def data(request: Request) -> Response:
-        records = filter_records(
-            read_records(LOG),
-            **query_window(
-                domain=request.query_params.get("domain", ""),
-                hours=request.query_params.get("hours", ""),
-            ),
-        )
+        domain = request.query_params.get("domain", "")
+        hours = request.query_params.get("hours", "")
+
+        def payload() -> dict[str, Any]:
+            records = filter_records(
+                read_records(LOG), **query_window(domain=domain, hours=hours)
+            )
+            return aggregate(
+                records, curation=read_curation(CURATION), catalog=live_catalog()
+            )
+
         return JSONResponse(
-            aggregate(records, curation=read_curation(CURATION), catalog=live_catalog()),
-            headers={"Cache-Control": "no-store"},
+            await run_in_threadpool(payload), headers={"Cache-Control": "no-store"}
         )
 
     @mcp.custom_route("/dashboard/curate", methods=["POST"], include_in_schema=False)
     async def curate_route(request: Request) -> Response:
-        parsed = _body_key_and_state(await request.body())
+        parsed = body_key_and_state(await request.body())
         if parsed is None:
             return Response(status_code=400)
         key, state = parsed
         if not key or state not in CURATION_STATES:
             return Response(status_code=400)
-        return JSONResponse(curate(CURATION, key, state, demand_baseline(key)))
+
+        def marked() -> dict[str, Any]:
+            # demand_baseline goes into the thread as well: it aggregates the whole
+            # log, which is the same unbounded read the data route hands over.
+            return curate(CURATION, key, state, demand_baseline(key))
+
+        return JSONResponse(
+            await run_in_threadpool(marked), headers={"Cache-Control": "no-store"}
+        )
 
     @mcp.custom_route("/dashboard/purge", methods=["POST"], include_in_schema=False)
     async def purge_route(request: Request) -> Response:
-        parsed = _body_key_and_state(await request.body())
+        parsed = body_key_and_state(await request.body())
         if parsed is None:
             return Response(status_code=400)
         key, _ = parsed
         if not key:
             return Response(status_code=400)
-        return JSONResponse(purge(LOG, CURATION, key))
+        return JSONResponse(
+            await run_in_threadpool(purge, LOG, CURATION, key),
+            headers={"Cache-Control": "no-store"},
+        )

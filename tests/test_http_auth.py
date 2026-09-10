@@ -470,7 +470,7 @@ def test_the_dashboard_is_allowed_alongside_unauthenticated_serving(served, monk
 
 
 def test_a_dashboard_on_a_wide_bind_is_announced_loudly(monkeypatch):
-    from server import access, mcp_server
+    from server import access, dashboard, mcp_server
 
     monkeypatch.setenv("KI_ICL_AUTH", "off")
     monkeypatch.setenv("KI_ICL_DASHBOARD", "1")
@@ -482,6 +482,10 @@ def test_a_dashboard_on_a_wide_bind_is_announced_loudly(monkeypatch):
 
     assert "/dashboard" in text
     assert "purge" in text
+    # The loopback host prints the log path as it starts; this host has no other line
+    # saying where its numbers come from, and reading the wrong file is the failure
+    # that looks like a working page with nothing on it.
+    assert str(dashboard.LOG) in text
 
 
 def test_no_dashboard_warning_when_it_is_not_mounted(monkeypatch):
