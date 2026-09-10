@@ -25,9 +25,8 @@ help:
 	@echo "first). Override with CONTEXT_ROOT=/path/to/tree for any other packaged tree."
 
 install:
-	python3 -m venv .venv
-	$(PY) -m pip install -q --upgrade pip
-	$(PY) -m pip install -q -r requirements-dev.txt
+	uv venv .venv --allow-existing
+	uv pip install -q -r requirements-dev.txt
 
 test:
 	$(PY) -m pytest -q
