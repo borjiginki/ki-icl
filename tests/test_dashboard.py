@@ -420,3 +420,20 @@ def test_the_dashboard_serves_a_live_catalog_when_run_as_a_script(tmp_path: Path
     finally:
         proc.terminate()
         proc.wait(timeout=5)
+
+
+def test_the_page_addresses_its_endpoints_relative_to_where_it_is_served():
+    """Served at / by scripts/dashboard.py and at /dashboard by the MCP server.
+
+    An absolute path works only for the first, and the failure mode is quiet: the page
+    renders its whole layout and then shows no data, because the fetch 404'd against a
+    route that does not exist under that prefix.
+    """
+    page = (Path(__file__).resolve().parent.parent / "server" / "dashboard.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'const BASE = location.pathname.replace(/\\/+$/, "");' in page
+    assert 'fetch(BASE + "/data?" + q)' in page
+    assert 'fetch(BASE + (state === "purge" ? "/purge" : "/curate")' in page
+    assert 'fetch("/' not in page, "an absolute fetch cannot work under a path prefix"
