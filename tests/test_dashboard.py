@@ -15,7 +15,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.dashboard import aggregate, filter_records, read_records  # noqa: E402
+from server.dashboard import aggregate, filter_records, read_records  # noqa: E402
 
 
 def rec(**kw):
