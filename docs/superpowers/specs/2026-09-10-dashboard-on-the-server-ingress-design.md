@@ -55,13 +55,19 @@ It gains one new function, `register(mcp)`, which mounts the routes described be
 
 Copying `scripts/` into the image instead would drag `demo.py`, `usage_report.py` and `inspect_claims.py` into a production image for no reason, so the module split is both cheaper and more honest.
 
-The path constants move with their functions.
-`LOG` and `CURATION` are already environment-driven (`CONTEXT_USAGE_LOG`, `CONTEXT_CURATION`), and their `ROOT`-relative defaults resolve to the same place from `server/` as from `scripts/`, since both are one level below the repository root.
+`LOG`, `CURATION` and `PAGE` move with their functions, because the server needs all three; `PORT` stays in the script, which is the only thing that binds a socket of its own.
+`LOG` and `CURATION` are already environment-driven (`CONTEXT_USAGE_LOG`, `CONTEXT_CURATION`), and every `ROOT`-relative default resolves to the same place from `server/` as from `scripts/`, since both are one level below the repository root.
+In the container `ROOT` is `/app`, so `PAGE` is `/app/server/dashboard.html` and the default log path is `/app/logs/usage.jsonl`, which is exactly what section 4 sets explicitly anyway.
 
 ### 2. The switch and the routes
 
-`KI_ICL_DASHBOARD` is read once at module level, the pattern `USAGE_LOG_PATH` and `_AUDIT_KEY` already use.
-Unset means `register()` is never called and not one route exists.
+The switch is `KI_ICL_DASHBOARD`, and it is read by a new `dashboard_from_env()` beside the existing `auth_mode()`.
+
+`build_server` gains a `dashboard: bool = False` parameter and calls `register_dashboard(mcp)` when it is true, imported as `from server.dashboard import register as register_dashboard` so the module name does not shadow the parameter.
+The environment is read at the call site, `mcp = build_server(auth=auth_from_env(), dashboard=dashboard_from_env())`, exactly as `auth` already is: `build_server` reads no environment, and the composition root decides.
+That also makes the routes testable by passing a flag rather than by manipulating `os.environ`.
+
+False means `register` is never called and not one route exists.
 
 When it is set, four routes are registered through `mcp.custom_route(..., include_in_schema=False)`:
 
@@ -110,6 +116,9 @@ It is declared from repository settings through a `DASHBOARD_ENABLED` repository
 
 In [deploy/app.tf](../../../deploy/app.tf), `KI_ICL_DASHBOARD` becomes a `dynamic "env"` on the flag, and the currently-static `CONTEXT_USAGE_LOG = ""` becomes conditional on it.
 
+The workflow also passes `-var "max_replicas=1"` when `DASHBOARD_ENABLED` is true, so the pipeline can actually satisfy precondition 2 below.
+Without that the plan would fail on a precondition with no wired way to clear it, since `max_replicas` defaults to 3 and nothing else passes it.
+
 A `dashboard_url` output, so the URL does not have to be assembled by hand.
 
 ### 6. Preconditions
@@ -120,10 +129,19 @@ Three, all hard failures on the `azurerm_container_app` resource, in the style o
    Otherwise the flag claims something nobody can reach, and the failure is silent.
 2. **`dashboard_enabled` requires `max_replicas == 1`.**
    Each replica writes its own file, so with the default ceiling of 3 the page shows whichever replica the load balancer happened to pick, and the numbers are wrong in a way nothing on the page reveals.
-   A precondition rather than a silent override, so the trade stays visible in the configuration.
+   A precondition rather than a silent override, so the trade stays visible in the configuration; the workflow sets the value, and this catches a local apply that did not.
 3. **`dashboard_enabled` and `auth_mode == "entra"` cannot both be true.**
    The dashboard has no authentication of its own and its corpus index bypasses both grant seams, so once real identities exist an IP allow-list is no longer a defensible gate.
    This is the guard that stops demo scaffolding surviving into production by inertia.
+
+### 7. The same two guards, in the server
+
+Terraform can only refuse a deployment it is asked to make, so the server carries its own copies, in the two places this repository already puts them.
+
+`refuse_unsafe_start` refuses to start when the dashboard switch is set and `KI_ICL_AUTH=entra`, the process-level twin of precondition 3.
+A guard that exists only in Terraform is a guard somebody routes around with `az containerapp update`.
+
+`startup_lines` gains a warning when the dashboard is on and the bind address is not loopback, beside the existing "serving UNAUTHENTICATED" one, saying that the corpus index and the purge route are reachable from wherever this port is.
 
 ## What this exposes
 
@@ -155,8 +173,9 @@ Those suites passing unmodified is the evidence that section 1 moved code rather
 
 **New tests.**
 
-- With `KI_ICL_DASHBOARD` unset, the app exposes no `/dashboard*` route at all. Asserted against the route table, not only against a 404, so a future catch-all cannot make this pass for the wrong reason.
-- With it set, `GET /dashboard` returns the page and `GET /dashboard/data` returns an aggregate matching what `aggregate()` returns for the same records.
+- `build_server(dashboard=False)` exposes no `/dashboard*` route at all. Asserted against the route table, not only against a 404, so a future catch-all cannot make this pass for the wrong reason.
+- `refuse_unsafe_start` raises when the dashboard switch is set with `KI_ICL_AUTH=entra`, and `startup_lines` warns when it is set on a non-loopback bind.
+- With `dashboard=True`, `GET /dashboard` returns the page and `GET /dashboard/data` returns an aggregate matching what `aggregate()` returns for the same records.
 - `domain` and `hours` query parameters filter as they do on the loopback host.
 - `POST /dashboard/curate` and `POST /dashboard/purge` have the same effects, and the same 400 and 404 behaviour, as `Handler.do_POST`.
 - The page's `BASE` resolves to `""` at `/` and to `/dashboard` at `/dashboard`, so the same file works under both hosts.
